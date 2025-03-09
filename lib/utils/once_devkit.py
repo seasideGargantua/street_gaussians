@@ -72,9 +72,45 @@ class ONCE(object):
 
     def load_sky_mask(self, frame_id, cam_name):
         cam_path = osp.join(self.data_root, self.seq_id, 'sky_mask', cam_name, '{}.jpg'.format(frame_id))
-        sky_data = np.array(Image.open(cam_path))
-        sky_mask = sky_data>0
-        return sky_mask.astype(np.float32)
+        sky_mask = (cv2.imread(cam_path)[..., 0]) > 0.
+        return Image.fromarray(sky_mask)
+
+    def load_obj_bound(self, frame_id, cam_name):
+        cam_path = osp.join(self.data_root, self.seq_id, 'dynamic_mask', cam_name, '{}.jpg'.format(frame_id))
+        obj_bound = (cv2.imread(cam_path)[..., 0]) > 0.
+        return Image.fromarray(obj_bound)
+
+    def load_lidar_depth(self, frame_id, cam_name):
+        w, h = self.get_WH(frame_id, cam_name)
+        l2w = self.get_l2w(frame_id)
+        w2c = np.linalg.inv(self.get_c2w(frame_id, cam_name))
+        points_xyz = once_loader.load_point_cloud(frame_id)[:, :3]
+        points_xyz_world = (np.pad(points_xyz, (0, 1), constant_values=1) @ l2w.T)[:, :3]
+        points_xyz_cam = (np.pad(points_xyz, ((0, 0), (0, 1)), constant_values=1) @ w2c.T)[:, :3]
+        points_depth = points_xyz_cam[..., 2]
+        points_xyz_pixel = points_xyz_cam[..., :3] @ ixt.T
+        points_xyz_pixel = points_xyz_pixel / points_xyz_pixel[..., 2:]
+        
+        valid_x = np.logical_and(points_xyz_pixel[..., 0] >= 0, points_xyz_pixel[..., 0] < w)
+        valid_y = np.logical_and(points_xyz_pixel[..., 1] >= 0, points_xyz_pixel[..., 1] < h)
+        valid_z = points_xyz_cam[..., 2] > 0.
+        valid_mask = np.logical_and(valid_x, np.logical_and(valid_y, valid_z))
+        
+        points_xyz = points_xyz[valid_mask]
+        points_coord = points_xyz_pixel[valid_mask].round().astype(np.int32)
+        points_coord[:, 0] = np.clip(points_coord[:, 0], 0, w-1)
+        points_coord[:, 1] = np.clip(points_coord[:, 1], 0, h-1)
+        
+        depth = (np.ones((h, w)) * np.finfo(np.float32).max).reshape(-1)
+        u, v = points_coord[:, 0], points_coord[:, 1]
+        indices = v * w + u
+        np.minimum.at(depth, indices, points_depth[valid_mask])
+        depth[depth >= np.finfo(np.float32).max - 1e-5] = 0
+        depth = depth.reshape(h, w)
+        return depth
+
+    def get_image_filename(self, frame_id, cam_name):
+        return osp.join(self.data_root, self.seq_id, cam_name, '{}.jpg'.format(frame_id))
 
     def get_frame_ids(self, cam_name):
         frame_list = os.listdir(osp.join(self.data_root, self.seq_id, cam_name))
@@ -104,6 +140,9 @@ class ONCE(object):
         l2w[:3, 3] = position
         c2w = np.dot(l2w, c2l)
         return c2w
+
+    def get_c2l(self, cam_name):
+        return np.array(self.calib[cam_name]['cam_to_velo'])
 
     def get_l2c(self, cam_name):
         c2l = np.array(self.calib[cam_name]['cam_to_velo'])

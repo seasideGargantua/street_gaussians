@@ -75,7 +75,7 @@ class StreetGaussianModel(nn.Module):
                 return True
             else:
                 return False
-        elif model_name.startswith('obj_'):
+        elif model_name == 'dynamic':
             if model_name in self.include_list and self.include_obj:
                 return True
             else:
@@ -83,13 +83,13 @@ class StreetGaussianModel(nn.Module):
         else:
             raise ValueError(f'Unknown model name {model_name}')
                 
-    def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float):
+    def create_from_pcd(self, pcd: dict, spatial_lr_scale: float):
         for model_name in self.model_name_id.keys():
             model: GaussianModel = getattr(self, model_name)
             if model_name in ['background', 'sky']:
-                model.create_from_pcd(pcd, spatial_lr_scale)
+                model.create_from_pcd(pcd['bkgd'], spatial_lr_scale)
             else:
-                model.create_from_pcd(spatial_lr_scale)
+                model.create_from_pcd(pcd['dynamic'], spatial_lr_scale)
 
     def save_ply(self, path):
         mkdir_p(os.path.dirname(path))

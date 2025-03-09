@@ -1,5 +1,5 @@
 import numpy as np
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 from lib.utils.graphics_utils import getWorld2View2, focal2fov, fov2focal, BasicPointCloud
 from plyfile import PlyData, PlyElement
 
@@ -19,11 +19,11 @@ class CameraInfo(NamedTuple):
     guidance: dict = dict()
 
 class SceneInfo(NamedTuple):
-    point_cloud: BasicPointCloud
+    point_cloud: Optional[BasicPointCloud, dict]
     train_cameras: list
     test_cameras: list
     nerf_normalization: dict
-    ply_path: str
+    ply_path: Optional[str, list]
     metadata: dict = dict()
     novel_view_cameras: list = None
 
@@ -90,9 +90,11 @@ def fetchPly(path):
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
     colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
     normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
-    return BasicPointCloud(points=positions, colors=colors, normals=normals)
+    if 't' in vertices.dtype.names:
+        t = np.array(vertices['t'])
+    return BasicPointCloud(points=positions, colors=colors, normals=normals, t=t)
 
-def storePly(path, xyz, rgb):
+def storePly(path, xyz, rgb, t=None):
     # set rgb to 0 - 255
     if rgb.max() <= 1. and rgb.min() >= 0:
         rgb = np.clip(rgb * 255, 0., 255.)
@@ -100,11 +102,16 @@ def storePly(path, xyz, rgb):
     dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
             ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
             ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
-    
+    if t is not None:
+        dtype += [('t', 'f4')]
+
+    # Create the structured array
     normals = np.zeros_like(xyz)
 
     elements = np.empty(xyz.shape[0], dtype=dtype)
     attributes = np.concatenate((xyz, normals, rgb), axis=1)
+    if t is not None:
+        attributes = np.concatenate((attributes, t.reshape(-1, 1)), axis=1)
     elements[:] = list(map(tuple, attributes))
 
     # Create the PlyData object and write to file

@@ -417,3 +417,111 @@ def quaternion_to_axis_angle(quaternions: torch.Tensor) -> torch.Tensor:
         0.5 - (angles[small_angles] * angles[small_angles]) / 48
     )
     return quaternions[..., 1:] / sin_half_angles_over_angles
+
+def parse_obj_info_numpy(obj_datas):
+    num_obj_datas = len(obj_datas)
+    obj_poses = np.zeros((num_obj_datas, 4, 4))
+    obj_corners_3d = np.zeros((num_obj_datas, 8, 3))
+    for i, obj_data in enumerate(obj_datas):
+        track_id = int(obj_data[7])
+        if track_id == -1:
+            continue
+        else:
+            quaternion = obj_data[3:7]
+            pose = np.eye(4)
+            pose[:3, :3] = quaternion_to_matrix_numpy(quaternion)
+            pose[:3, 3] = obj_data[:3]
+            
+            min_x, min_y, min_z = -obj_data[8:11] / 2.
+            max_x, max_y, max_z = obj_data[8:11] / 2.
+            corners_3d_obj = np.array([
+                [min_x, min_y, min_z],
+                [min_x, min_y, max_z],
+                [min_x, max_y, min_z],
+                [min_x, max_y, max_z],
+                [max_x, min_y, min_z],
+                [max_x, min_y, max_z],
+                [max_x, max_y, min_z],
+                [max_x, max_y, max_z],
+            ]).astype(np.float32)
+            corners_3d_world = corners_3d_obj @ pose[:3, :3].T + pose[:3, 3]
+            
+            obj_poses[i] = pose
+            obj_corners_3d[i] = corners_3d_world
+        
+    return obj_poses, obj_corners_3d
+
+def parse_one_obj_info_numpy(obj_data):
+    obj_pose = np.eye(4)
+    obj_corners_3d = np.zeros((8, 3))
+    
+    track_id = int(obj_data[7])
+    if track_id == -1:
+        return obj_pose, obj_corners_3d
+    else:
+        quaternion = obj_data[3:7]
+        obj_pose[:3, :3] = quaternion_to_matrix_numpy(quaternion)
+        obj_pose[:3, 3] = obj_data[:3]
+
+        min_x, min_y, min_z = -obj_data[8:11] / 2.
+        max_x, max_y, max_z = obj_data[8:11] / 2.
+        corners_3d_obj = np.array([
+            [min_x, min_y, min_z],
+            [min_x, min_y, max_z],
+            [min_x, max_y, min_z],
+            [min_x, max_y, max_z],
+            [max_x, min_y, min_z],
+            [max_x, min_y, max_z],
+            [max_x, max_y, min_z],
+            [max_x, max_y, max_z],
+        ]).astype(np.float32)
+        obj_corners_3d = corners_3d_obj @ obj_pose[:3, :3].T + obj_pose[:3, 3]
+
+    return obj_pose, obj_corners_3d
+
+def parse_obj_info_torch(obj_datas: torch.Tensor, pose_only=True):    
+    num_obj_datas = len(obj_datas)
+    obj_poses = dict()
+    obj_corners_3d = dict()
+    
+    if not pose_only:
+        obj_corners_3d = torch.zeros((num_obj_datas, 8, 3), device=obj_datas.device) * -1
+    
+    for i, obj_data in enumerate(obj_datas):
+        track_id = int(obj_data[7])
+        if track_id == -1:
+            continue
+        else:            
+            quaternion = obj_data[3:7]
+            pose = torch.eye(4, device=obj_datas.device)
+            pose[:3, :3] = quaternion_to_matrix(quaternion.unsqueeze(0)).squeeze(0)
+            pose[:3, 3] = obj_data[:3]
+            obj_poses[track_id] = pose
+            
+            if not pose_only:
+                min_x, min_y, min_z = -obj_data[8:11] / 2.
+                max_x, max_y, max_z = obj_data[8:11] / 2.
+                corners_3d_obj = torch.tensor([
+                    [min_x, min_y, min_z],
+                    [min_x, min_y, max_z],
+                    [min_x, max_y, min_z],
+                    [min_x, max_y, max_z],
+                    [max_x, min_y, min_z],
+                    [max_x, min_y, max_z],
+                    [max_x, max_y, min_z],
+                    [max_x, max_y, max_z],
+                ], device=obj_datas.device).float()
+                corners_3d_world = corners_3d_obj @ pose[:3, :3].T + pose[:3, 3]
+                
+                obj_corners_3d[track_id] = corners_3d_world
+    
+    if not pose_only:
+        return obj_poses, obj_corners_3d
+    else:
+        return obj_poses, None
+
+def startswith_any(k, l):
+    for s in l:
+        if k.startswith(s):
+            return True
+    return False

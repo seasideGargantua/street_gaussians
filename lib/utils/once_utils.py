@@ -1,6 +1,6 @@
 import pandas
 import json
-from scipy.spatial.transform import Rotation #把四元组转换为旋转矩阵
+from scipy.spatial.transform import Rotation
 import os
 import numpy as np
 import cv2
@@ -10,298 +10,11 @@ import math
 from glob import glob
 from tqdm import tqdm
 from lib.config import cfg
-from lib.utils.data_utils import get_val_frames
-from lib.datasets.base_readers import storePly, get_Sphere_Norm
+from lib.datasets.base_readers import storePly
 from lib.utils.general_utils import parse_one_obj_info_numpy
 from lib.utils.box_utils import bbox_to_corner3d, inbbox_points
 from lib.utils.data_utils import get_val_frames, get_rays, sphere_intersection
 from lib.utils.colmap_utils import read_points3D_binary
-
-
-def build_frame_name_to_idx(datadir, selected_frames):
-    start_frame, end_frame = selected_frames[0], selected_frames[1]
-    
-    # 获取 image_dir 路径
-    image_dir = os.path.join(datadir, 'cam03')
-    
-    # 获取所有图片文件名
-    image_names = sorted(os.listdir(image_dir))  # 按照文件名排序，假设文件名为时间戳格式
-    
-    # 构建 frame_name2frame_idx 字典
-    frame_name2frame_idx = {}
-    
-    # 只考虑 selected_frames 范围内的文件名
-    for idx, image_name in enumerate(image_names[start_frame:end_frame + 1]):
-        # 去掉文件扩展名
-        frame_name = image_name.split('.')[0]
-        # 将文件名映射到对应的索引
-        frame_name2frame_idx[int(frame_name)] = idx
-    
-    return frame_name2frame_idx
-
-
-def quaternion_from_yaw(yaw_angle):
-    """
-    Create a quaternion for a yaw rotation around the z-axis.
-
-    Parameters:
-    - yaw_angle (float): Yaw angle in radians.
-
-    Returns:
-    - np.array: Quaternion [a, b, c, d].
-    """
-    # Calculate half angle
-    half_angle = 0.5 * yaw_angle
-
-    # Quaternion components
-    a = np.cos(half_angle)
-    b = 0.0
-    c = 0.0
-    d = np.sin(half_angle)
-
-    return np.array([a, b, c, d]).astype(np.float64)
-
-_track2label = {"car": 1, "cyclist": 2, "pedestrian": 3, "truck": 4,} #: update to semantic label
-def get_obj_pose_tracking(datadir, selected_frames):
-    
-    # import ipdb; ipdb.set_trace()
-    objects_meta_Once = dict()
-
-    objects_meta = {}
-    tracklets_ls = []
-    
-    tracklet_path = glob(os.path.join(datadir.replace("3D_images", "3D_infos"), '*.txt'))[0]
-    json_path = glob(os.path.join(datadir.replace("3D_images", "3D_infos"), '*.json'))[0]
-    import json 
-    with open(json_path, 'r') as file:
-        json_data = json.load(file)
-
-    f = open(tracklet_path, 'r')
-    tracklets_str = f.read().splitlines()
-    # import ipdb; ipdb.set_trace()
-    tracklets_str = tracklets_str[1:] #tracklets_str[0]是标签，tracklets_str[1:]是数据。    
-    start_frame, end_frame = selected_frames[0], selected_frames[1]
-    
-    image_dir = os.path.join(datadir, 'cam03')
-    
-    frame_name2frame_idx = build_frame_name_to_idx(datadir, selected_frames)
-    
-    n_obj_in_frame = np.zeros(end_frame+1) 
-
-    # Initialize lists and sets
-    obj_data = []
-    obj_meta = []
-    scene_objects = set()
-    scene_classes = set()
-       
-    for tracklet in tracklets_str:
-        tracklet = tracklet.split()
-        
-        frame_id = int(tracklet[0])
-        # 遍历 json_data["frames"] 查找匹配的 frame_id
-        for frame_data in json_data["frames"]:
-            if frame_data["frame_id"] == str(frame_id):  # 注意 json 中的 frame_id 是字符串
-                frame_pose = frame_data["pose"]
-                print("Pose for frame_id", frame_id, ":", frame_pose)
-                break
-        
-        frame_position = np.array(frame_pose[4:])  # First three values: position [x, y, z]
-        frame_rotation = np.array(frame_pose[:4])  # Last four values: rotation [qw, qx, qy, qz] 
-        from scipy.spatial.transform import Rotation as R
-        # 使用 scipy 的 Rotation 类将四元组转换为旋转矩阵
-        rotation = R.from_quat(frame_rotation)  # 创建旋转对象
-        rotation_matrix = rotation.as_matrix()  # 获取旋转矩阵
-
-        l2w_matrix = np.eye(4)
-        l2w_matrix[:3, :3] = rotation_matrix
-        l2w_matrix[:3, 3] = frame_position
-        
-        track_id = int(tracklet[1])
-        object_class = tracklet[2]
-        center_x, center_y, center_z = float(tracklet[3]), float(tracklet[4]), float(tracklet[5]) 
-        lidar_xyz = np.array([center_x, center_y, center_z])
-        lidar_xyz = np.concatenate([lidar_xyz, np.ones_like(lidar_xyz[..., :1])], axis=-1)
-        world_xyz = np.dot(l2w_matrix, lidar_xyz.T).T
-        world_xyz = world_xyz[:3]        
-        center_x, center_y, center_z = world_xyz
-        
-        #TODO xyz需要从lidar坐标系转换到世界坐标系
-        length, width, height = float(tracklet[6]), float(tracklet[7]), float(tracklet[8]) 
-        quaternion = quaternion_from_yaw(float(tracklet[9]))
-        
-        center_x = np.array([center_x])
-        center_y = np.array([center_y])
-        center_z = np.array([center_z])
-        pose3d = np.concatenate([center_x, center_y, center_z,quaternion])
-        
-        obj_type = np.array([_track2label[object_class]])
-        obj = np.concatenate([np.array([frame_id, track_id]), obj_type, np.array([length, width, height]), pose3d])
-     
-        if track_id not in objects_meta_Once:
-            objects_meta_Once[track_id] = np.array([track_id, obj_type, length, width, height])
-        
-        rw, rx, ry, rz = quaternion
-        tr_array = np.array([frame_id, track_id, obj_type.item(), height, width, length, center_x.item(), center_y.item(), center_z.item(), rw, rx, ry, rz, 0])      
-        tracklets_ls.append(tr_array)
-        
-        frame_idx_ = frame_name2frame_idx[frame_id]
-        
-        n_obj_in_frame[frame_idx_] += 1
-
-    tracklets_array = np.array(tracklets_ls)
-
-    max_obj_per_frame = int(n_obj_in_frame[start_frame:end_frame + 1].max())
-    
-    num_frames = end_frame - start_frame + 1
-    visible_objects = np.ones([num_frames, max_obj_per_frame, 13]) * -1.0
-
-
-    # Iterate through the tracklets and process object data
-    for tracklet in tracklets_array:
-        frame_id = int(tracklet[0])
-        track_id = int(tracklet[1])
-        
-        obj_type = np.array(objects_meta_Once[track_id][1])
-        dim = objects_meta_Once[track_id][-3:].astype(np.float32)
-
-        if track_id not in objects_meta:
-            
-            objects_meta[track_id] = np.concatenate(
-                [
-                    np.array([track_id]).astype(np.float32),
-                    objects_meta_Once[track_id][2:].astype(np.float64),
-                    np.array(objects_meta_Once[track_id][1]).astype(np.float64),
-                ]
-            )
-                    
-        pose3d = tracklet[6:13]
-        
-        
-        obj = np.concatenate([np.array([frame_id, track_id]), obj_type, dim, pose3d])
-        frame_idx_ = frame_name2frame_idx[frame_id]
-
-        obj_column = np.argwhere(visible_objects[frame_idx_, :, 0] < 0).min()
-
-        visible_objects[frame_idx_, obj_column] = obj    
-    
-
-    obj_state = visible_objects[:, :, [1, 2]] # [track_id, class_id]
-    obj_pose = visible_objects[:, :, 6:] #center_x, center_y, center_z, rw, rx, ry, rz
-    obj_track_id = obj_state[..., 0][..., None]
-    obj_meta_ls = list(objects_meta.values()) # object_id, length, width, height, class_id
-    obj_meta_ls.insert(0, np.zeros_like(obj_meta_ls[0]))
-    obj_meta_ls[0][0] = -1
-
-
-    row_to_track_id = np.concatenate(
-        [
-            np.linspace(0, len(objects_meta.values()), len(objects_meta.values()) + 1)[:, None],
-            np.array(obj_meta_ls)[:, 0][:, None],
-        ],
-        axis=1,
-    ).astype(np.int32)
-    # [n_frames, n_max_obj]
-    track_row = np.zeros_like(obj_track_id)
-    
-    scene_objects = []
-    scene_classes = list(np.unique(np.array(obj_meta_ls)[..., 4]))
-    for i, frame_objects in enumerate(obj_track_id):
-        for j, camera_objects in enumerate(frame_objects):
-            track_row[i, j] = np.argwhere(row_to_track_id[:, 1] == camera_objects)
-            if camera_objects >= 0 and not camera_objects in scene_objects:
-                # print(camera_objects, "in this scene")
-                scene_objects.append(camera_objects)
-
-
-    box_scale = 2
-    print('box scale: ', box_scale)
-    obj_meta_ls = [
-        (obj * np.array([1.0, box_scale, box_scale, box_scale, 1.0])).astype(np.float32)
-        for obj in obj_meta_ls
-    ]  # [n_obj, [track_id, length, width, height, class_id]]
-    obj_meta = np.array(obj_meta_ls).astype(np.float32)
-     
-    # [n_frames, n_obj, [track_id, length, width, height, class_id]]
-    obj_meta_idx = track_row.squeeze(-1).astype(np.int32)
-    
-    frames = list(range(start_frame, end_frame + 1))
-    obj_frame_range = np.zeros([len(obj_meta), 2]).astype(np.int32)
-    for i in range(len(obj_meta)):
-        if i == 0:
-            continue
-        
-        obj_frame_idx = np.argwhere(obj_meta_idx == i)[:, 0]
-        obj_frame_idx = obj_frame_idx.astype(np.int32)
-        frames_numpy = np.array(frames).astype(np.int32)
-        obj_frames = frames_numpy[obj_frame_idx]
-
-        obj_frame_range[i, 0] = np.min(obj_frames)
-        obj_frame_range[i, 1] = np.max(obj_frames)
-    
-    batch_obj_meta = obj_meta[obj_meta_idx] 
-    
-    #obj_pose: center_x, center_y, center_z, rw, rx, ry, rz
-    #batch_obj_meta: track_id, length, width, height, type
-    obj_data = np.concatenate([obj_pose, batch_obj_meta], axis=-1)
-    data_len = obj_data.shape[0]
-    meta_data = np.array([[num_frames, max_obj_per_frame]] * data_len)[:,None,:].repeat(max_obj_per_frame, axis=1)
-    batch_trackid = batch_obj_meta[... ,0]
-    # __import__('ipdb').set_trace()
-    meta_data = np.concatenate([meta_data, batch_trackid[..., None]], axis=-1)
-    tracklet = np.concatenate([meta_data, obj_pose], axis=-1)
-
-    # track_id + length + width + height + class_id + start frame + end frame
-    obj_meta = np.concatenate([obj_meta, obj_frame_range], axis=-1)
-    # import ipdb; ipdb.set_trace()
-    obj_infos = {}
-    for i in range(obj_meta.shape[0]):
-        track_id = obj_meta[i][0]
-        length = obj_meta[i][1]
-        width = obj_meta[i][2]
-        height = obj_meta[i][3]
-        class_id = obj_meta[i][4]
-        start_frame = obj_meta[i][5]
-        end_frame = obj_meta[i][6]
-
-        obj_infos[track_id] = {
-            "track_id": track_id,
-            "length": length,
-            "width": width,
-            "height": height,
-            "class": class_id,
-            "class_label": 'car',
-            "start_frame": start_frame,
-            "end_frame": end_frame,
-        }
-
-    return tracklet, obj_infos, scene_classes, scene_objects, obj_data
-    
-    
-    # max_obj_per_frame = int(n_obj_in_frame[start_frame:end_frame + 1].max())
-
-    # num_frames = end_frame - start_frame + 1
-    # visible_objects = np.ones([num_frames, max_obj_per_frame, 13]) * -1.0 #初始化的时候都是-1
-
-
-    
-    
-    # obj_data = np.empty((len(exts), 0, 12))
-    # obj_meta = np.array([[-1, 0, 0, 0, 0, 0, 0]])
-    # scene_classes = [0.0]
-    # scene_objects = []
-    
-    # return obj_data, obj_meta, scene_classes, scene_objects
-
-
-def get_obj_pose_tracking_empty(datadir, exts):
-    obj_data = np.empty((len(exts), 0, 12))
-    obj_meta = np.array([[-1, 0, 0, 0, 0, 0, 0]])
-    scene_classes = [0.0]
-    scene_objects = []
-    
-    return obj_data, obj_meta, scene_classes, scene_objects
-
-
 
 # load ego pose and camera calibration(extrinsic and intrinsic)
 def load_camera_info(datadir, start_frame, end_frame):
@@ -395,23 +108,6 @@ def generate_dataparser_outputs(
     cams = [3] * len(frames)
     # load calibration and ego pose
     ixts, exts, lidar2worlds = load_camera_info(datadir, start_frame, end_frame)    
-
-    if cfg.data.get('skip_obj', False):
-        tracklet, obj_data, obj_meta, scene_classes, scene_objects = None, None, None, None, None
-    else:
-        tracklet, obj_meta, scene_classes, scene_objects, obj_data = get_obj_pose_tracking(datadir, selected_frames)
-    
-    #obj_data  (61, 7, 12)
-    #obj_meta  (13, 7) [-1.00000000e+00,  0.00000000e+00,  0.00000000e+00,
-    #     0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
-    #     0.00000000e+00],
-    #scene_classes [0.0, 1.0, 3.0, 4.0, 5.0, 7.0]
-    #scene_objects [array([2.]), array([9.]), array([14.]), array([53.]), array([15.]), array([55.]), array([234.]), array([932.]), array([1408.]), array([3025.]), array([239.]), array([2125.])]
-    
-    
-    
-    # import ipdb; ipdb.set_trace()
-    
     
     result = dict()
     result['num_frames'] = len(frames)
@@ -684,20 +380,8 @@ def generate_dataparser_outputs(
                     # downsample_points_lidar = points_lidar
                     points_lidar_xyz = np.asarray(downsample_points_lidar.points).astype(np.float32)
                     points_lidar_rgb = np.asarray(downsample_points_lidar.colors).astype(np.float32)
-                                        
-                    # if len(points_lidar_xyz) > initial_num_bkgd:
-                    #     random_indices = np.random.choice(len(points_lidar_xyz), initial_num_bkgd, replace=False)
-                    #     points_lidar_xyz = points_lidar_xyz[random_indices]
-                    #     points_lidar_rgb = points_lidar_rgb[random_indices]
                                 
-                elif k.startswith('obj'):
-                    # points_obj = o3d.geometry.PointCloud()
-                    # points_obj.points = o3d.utility.Vector3dVector(points_xyz)
-                    # points_obj.colors = o3d.utility.Vector3dVector(points_rgb)
-                    # downsample_points_lidar = points_obj.voxel_down_sample(voxel_size=0.05)
-                    # points_xyz = np.asarray(downsample_points_lidar.points).astype(np.float32)
-                    # points_rgb = np.asarray(downsample_points_lidar.colors).astype(np.float32)  
-                    
+                elif k.startswith('obj'): 
                     if len(points_xyz) > initial_num_obj:
                         random_indices = np.random.choice(len(points_xyz), initial_num_obj, replace=False)
                         points_xyz = points_xyz[random_indices]
@@ -709,40 +393,6 @@ def generate_dataparser_outputs(
                 else:
                     raise NotImplementedError()
                 
-        # Get sphere center and radius
-        # lidar_sphere_normalization = get_Sphere_Norm(points_lidar_xyz)
-        # sphere_center = lidar_sphere_normalization['center']
-        # sphere_radius = lidar_sphere_normalization['radius']
-
-        # combine SfM pointcloud with LiDAR pointcloud
-        # points_colmap_dist = np.linalg.norm(points_colmap_xyz - sphere_center, axis=-1)
-        # mask = points_colmap_dist < 2 * sphere_radius
-        # points_colmap_xyz = points_colmap_xyz[mask]
-        # points_colmap_rgb = points_colmap_rgb[mask]
-        
-        # assert cfg.data.use_colmap or cfg.data.use_lidar
-        # if cfg.data.use_colmap and not cfg.data.use_lidar:
-        #     points_colmap_xyz, points_colmap_rgb, points_colmap_error = read_points3D_binary(pointcloud_colmap)
-        #     points_colmap_rgb = points_colmap_rgb / 255
-            
-        #     if len(points_colmap_xyz) < 1000:
-        #         print(f'Sfm fails for background with {len(points_colmap_xyz)} points, still using LiDAR point cloud')
-        #         points_bkgd_xyz = points_lidar_xyz
-        #         points_bkgd_rgb = points_lidar_rgb
-        #     else:
-        #         points_bkgd_xyz = points_colmap_xyz
-        #         points_bkgd_rgb = points_colmap_rgb
-            
-        #     print('No pointcloud for object, will perform random initialization for object pointcloud')            
-        #     # no pointcloud for object
-        #     points_xyz_dict.clear()            
-        # elif cfg.data.use_lidar and not cfg.data.use_colmap:
-        #     points_bkgd_xyz = points_lidar_xyz
-        #     points_bkgd_rgb = points_lidar_rgb
-        # else:
-        #     points_bkgd_xyz = np.concatenate([points_lidar_xyz, points_colmap_xyz], axis=0) 
-        #     points_bkgd_rgb = np.concatenate([points_lidar_rgb, points_colmap_rgb], axis=0)
-        
         points_bkgd_xyz = np.concatenate([points_lidar_xyz, points_colmap_xyz], axis=0) 
         points_bkgd_rgb = np.concatenate([points_lidar_rgb, points_colmap_rgb], axis=0)
           
@@ -752,75 +402,7 @@ def generate_dataparser_outputs(
         points_rgb_dict['colmap'] = points_colmap_rgb
         points_xyz_dict['bkgd'] = points_bkgd_xyz
         points_rgb_dict['bkgd'] = points_bkgd_rgb
-        
-        # Sample sky point cloud        
-        # background_sphere_points = 50000
-        # background_sphere_distance = 2.5    
-        
-        # if cfg.model.nsg.get('include_sky', False):
-        #     sky_mask_dir = os.path.join(datadir, 'sky_mask')  
-        #     assert os.path.exists(sky_mask_dir)
-        #     points_xyz_sky_mask = []
-        #     points_rgb_sky_mask = []
-        #     num_samples = background_sphere_points // len(train_frames)
-        #     print('sample points from sky mask for background sphere')
-        #     for i, frame in tqdm(enumerate(range(start_frame, end_frame+1))):
-        #         if frames_idx[i] not in train_frames:
-        #             continue
-                
-        #         image_path = image_filenames[i]
-        #         image = cv2.imread(image_path)[..., [2, 1, 0]] / 255.
-        #         H, W, _ = image.shape
-                
-        #         sky_mask_path = os.path.join(sky_mask_dir,  os.path.basename(image_path))
-        #         sky_mask = (cv2.imread(sky_mask_path)[..., 0] > 0).reshape(-1)
-        #         sky_indices = np.argwhere(sky_mask == True)[..., 0]
-                
-        #         if len(sky_indices) == 0:
-        #             continue
-        #         elif len(sky_indices) > num_samples:
-        #             random_indices = np.random.choice(len(sky_indices), num_samples, replace=False)
-        #             sky_indices = sky_indices[random_indices]
-                
-        #         K = ixts[i]
-        #         w2c = np.linalg.inv(exts[i])
-        #         R, T = w2c[:3, :3], w2c[:3, 3]
-        #         rays_o, rays_d = get_rays(H, W, K, R, T)
-        #         rays_o = rays_o.reshape(-1, 3)[sky_indices]
-        #         rays_d = rays_d.reshape(-1, 3)[sky_indices]
-
-        #         p_sphere = sphere_intersection(rays_o, rays_d, sphere_center, sphere_radius * background_sphere_distance)
-        #         points_xyz_sky_mask.append(p_sphere)
-                
-        #         pixel_value = image.reshape(-1, 3)[sky_indices]
-        #         points_rgb_sky_mask.append(pixel_value)
-                
-        #     points_xyz_sky_mask = np.concatenate(points_xyz_sky_mask, axis=0)
-        #     points_rgb_sky_mask = np.concatenate(points_rgb_sky_mask, axis=0)    
-        #     points_xyz_dict['sky'] = points_xyz_sky_mask
-        #     points_rgb_dict['sky'] = points_rgb_sky_mask
-
-        # elif cfg.data.get('add_background_sphere', False):            
-        #     print('sample random points for background sphere')
-
-        #     # Random sample points on the sphere
-        #     samples = np.arange(background_sphere_points)
-        #     y = 1.0 - samples / float(background_sphere_points) * 2 # y in [-1, 1]
-        #     radius = np.sqrt(1 - y * y) # radius at y
-        #     phi = math.pi * (math.sqrt(5.) - 1.) # golden angle in radians
-        #     theta = phi * samples # golden angle increment
-        #     x = np.cos(theta) * radius
-        #     z = np.sin(theta) * radius
-        #     unit_sphere_points = np.concatenate([x[:, None], y[:, None], z[:, None]], axis=1)
-            
-        #     points_xyz_sky_random = (unit_sphere_points * sphere_center * background_sphere_distance) + sphere_radius
-        #     points_rgb_sky_random = np.asarray(np.random.random(points_xyz_sky_random.shape) * 255, dtype=np.uint8)
-            
-        #     points_xyz_dict['sky'] = points_xyz_sky_random
-        #     points_rgb_dict['sky'] = points_rgb_sky_random
-        # else:
-        #     pass
-                
+           
         result['points_xyz_dict'] = points_xyz_dict
         result['points_rgb_dict'] = points_rgb_dict
 

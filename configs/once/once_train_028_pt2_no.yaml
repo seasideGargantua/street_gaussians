@@ -1,9 +1,11 @@
 task: once_exp
-source_path: ./data/ONCE_Part/3D_images/data/000028
+source_path: ./data/once
 exp_name: once_train_028_part2
 # exp_name: once_train_92
 
 data:
+  seq_id: '000028'
+  cam_names: ['cam03']
   split_test: -1
   split_train: 1
   type: Once

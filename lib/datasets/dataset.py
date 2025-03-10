@@ -6,6 +6,7 @@ from lib.config import cfg
 from lib.datasets.base_readers import storePly, SceneInfo
 from lib.datasets.colmap_readers import readColmapSceneInfo
 from lib.datasets.blender_readers import readNerfSyntheticInfo
+from lib.datasets.waymo_full_readers import readWaymoFullInfo
 from lib.datasets.once_readers import readOnceInfo
 
 sceneLoadTypeCallbacks = {

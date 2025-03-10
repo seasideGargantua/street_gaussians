@@ -37,8 +37,7 @@ class ONCE(object):
     camera_tags = ['top', 'top2', 'left_back', 'left_front', 'right_front', 'right_back', 'back']
 
     def __init__(self, dataset_root, seq_id):
-        self.dataset_root = dataset_root
-        self.data_root = osp.join(self.dataset_root, 'data')
+        self.data_root = dataset_root
         self.seq_id = seq_id
         self.load_metadata()
 
@@ -81,26 +80,28 @@ class ONCE(object):
         return Image.fromarray(obj_bound)
 
     def load_lidar_depth(self, frame_id, cam_name):
-        w, h = self.get_WH(frame_id, cam_name)
+        w, h = self.get_WH()
         l2w = self.get_l2w(frame_id)
         w2c = np.linalg.inv(self.get_c2w(frame_id, cam_name))
-        points_xyz = once_loader.load_point_cloud(frame_id)[:, :3]
-        points_xyz_world = (np.pad(points_xyz, (0, 1), constant_values=1) @ l2w.T)[:, :3]
-        points_xyz_cam = (np.pad(points_xyz, ((0, 0), (0, 1)), constant_values=1) @ w2c.T)[:, :3]
+        ixt = self.get_intr(cam_name)
+        points_xyz = self.load_point_cloud(frame_id)[:, :3]
+        points_xyz_homo = np.concatenate([points_xyz, np.ones_like(points_xyz[..., :1])], axis=-1)
+        points_xyz_world = (points_xyz_homo @ l2w.T)[:, :3]
+        points_xyz_homo = np.concatenate([points_xyz_world, np.ones_like(points_xyz_world[..., :1])], axis=-1)
+        points_xyz_cam = (points_xyz_homo @ w2c.T)[:, :3]
         points_depth = points_xyz_cam[..., 2]
         points_xyz_pixel = points_xyz_cam[..., :3] @ ixt.T
         points_xyz_pixel = points_xyz_pixel / points_xyz_pixel[..., 2:]
-        
+
         valid_x = np.logical_and(points_xyz_pixel[..., 0] >= 0, points_xyz_pixel[..., 0] < w)
         valid_y = np.logical_and(points_xyz_pixel[..., 1] >= 0, points_xyz_pixel[..., 1] < h)
         valid_z = points_xyz_cam[..., 2] > 0.
         valid_mask = np.logical_and(valid_x, np.logical_and(valid_y, valid_z))
         
-        points_xyz = points_xyz[valid_mask]
         points_coord = points_xyz_pixel[valid_mask].round().astype(np.int32)
         points_coord[:, 0] = np.clip(points_coord[:, 0], 0, w-1)
         points_coord[:, 1] = np.clip(points_coord[:, 1], 0, h-1)
-        
+
         depth = (np.ones((h, w)) * np.finfo(np.float32).max).reshape(-1)
         u, v = points_coord[:, 0], points_coord[:, 1]
         indices = v * w + u
@@ -109,7 +110,7 @@ class ONCE(object):
         depth = depth.reshape(h, w)
         return depth
 
-    def get_image_filename(self, frame_id, cam_name):
+    def get_image_path(self, frame_id, cam_name):
         return osp.join(self.data_root, self.seq_id, cam_name, '{}.jpg'.format(frame_id))
 
     def get_frame_ids(self, cam_name):
@@ -153,6 +154,47 @@ class ONCE(object):
 
     def get_WH(self):
         return self.meta_info['image_size']
+
+    @staticmethod
+    def split_point_cloud(points, points_time, rgb, obj_bound, w2c, ixt, w, h):
+        obj_bound = np.array(obj_bound)
+        # project points to image
+        points_xyz = points[:, :3]
+        points_xyz_homo = np.concatenate([points_xyz, np.ones_like(points_xyz[..., :1])], axis=-1)
+        points_xyz_cam = (points_xyz_homo @ w2c.T)[:, :3]
+        points_xyz_pixel = points_xyz_cam[..., :3] @ ixt.T
+        points_xyz_pixel = points_xyz_pixel / points_xyz_pixel[..., 2:]
+        valid_x = np.logical_and(points_xyz_pixel[..., 0] >= 0, points_xyz_pixel[..., 0] < w)
+        valid_y = np.logical_and(points_xyz_pixel[..., 1] >= 0, points_xyz_pixel[..., 1] < h)
+        valid_z = points_xyz_cam[..., 2] > 0.
+        valid_mask = np.logical_and(valid_x, np.logical_and(valid_y, valid_z))
+        valid_indices = np.where(valid_mask)[0]
+    
+        # get valid 2d points
+        valid_points_2d = points_xyz_pixel[valid_indices].astype(int)
+        
+        # get points rgb
+        points_rgb = rgb[valid_points_2d[:, 1], valid_points_2d[:, 0]]
+
+        # check if points are in object bound
+        mask_values = obj_bound[valid_points_2d[:, 1], valid_points_2d[:, 0]]
+        in_mask = mask_values != 0
+
+        dynamic_points = points[valid_indices[in_mask]]
+        dynamic_points_time = points_time[valid_indices[in_mask]]
+        dynamic_points_rgb = points_rgb[in_mask]
+
+        bkgd_points = points[valid_indices[~in_mask]]
+        bkgd_points_time = points_time[valid_indices[~in_mask]]
+        bkgd_points_rgb = points_rgb[~in_mask]
+
+        return { 'dynamic_points': dynamic_points,
+                 'dynamic_points_time': dynamic_points_time,
+                 'dynamic_points_rgb': dynamic_points_rgb,
+                 'bkgd_points': bkgd_points,
+                 'bkgd_points_time': bkgd_points_time,
+                 'bkgd_points_rgb': bkgd_points_rgb, }
+
     # def undistort_image(self, seq_id, frame_id):
     #     img_list = []
     #     split_name = self._find_split_name(seq_id)

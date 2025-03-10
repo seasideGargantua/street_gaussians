@@ -25,14 +25,7 @@ def readOnceInfo(path, images='images', split_train=-1, split_test=-1, **kwargs)
         os.system(f'rm -rf {save_dir}')
         shutil.copytree(colmap_dir, save_dir)
         
-    bkgd_ply_path = os.path.join(cfg.model_path, 'input_ply/points3D_bkgd.ply')
-    dynamic_ply_path = os.path.join(cfg.model_path, 'input_ply/points3D_dynamic.ply')
-    build_pointcloud = (cfg.mode == 'train') and (not os.path.exists(bkgd_ply_path) or cfg.data.get('regenerate_pcd', False))
-    
-    output = generate_dataparser_outputs(
-        datadir=path,
-        build_pointcloud=build_pointcloud
-    )
+    output = generate_dataparser_outputs(datadir=path)
 
     cam_infos = output['cam_infos']
     num_frames = output['num_frames']
@@ -69,6 +62,8 @@ def readOnceInfo(path, images='images', split_train=-1, split_test=-1, **kwargs)
     print(f'Scene extent: {nerf_normalization["radius"]}')
 
     # Get sphere center
+    ply_path = output['ply_path']
+    bkgd_ply_path = ply_path['bkgd_ply_path']
     lidar_ply_path = os.path.join(cfg.model_path, 'input_ply/points3D_lidar.ply')
     if os.path.exists(lidar_ply_path):
         sphere_pcd: BasicPointCloud = fetchPly(lidar_ply_path)
@@ -80,14 +75,14 @@ def readOnceInfo(path, images='images', split_train=-1, split_test=-1, **kwargs)
     scene_metadata['sphere_radius'] = sphere_normalization['radius']
     print(f'Sphere extent: {sphere_normalization["radius"]}')
 
-    pcd: BasicPointCloud = fetchPly(bkgd_ply_path)
+    point_cloud = output['point_cloud']
 
     scene_info = SceneInfo(
         point_cloud=point_cloud,
         train_cameras=train_cam_infos,
         test_cameras=test_cam_infos,
         nerf_normalization=nerf_normalization,
-        ply_path=bkgd_ply_path,
+        ply_path=ply_path,
         metadata=scene_metadata,
         novel_view_cameras=novel_view_cam_infos,
     )

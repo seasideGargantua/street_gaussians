@@ -1,5 +1,5 @@
 import numpy as np
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, Union
 from lib.utils.graphics_utils import getWorld2View2, focal2fov, fov2focal, BasicPointCloud
 from plyfile import PlyData, PlyElement
 
@@ -19,11 +19,11 @@ class CameraInfo(NamedTuple):
     guidance: dict = dict()
 
 class SceneInfo(NamedTuple):
-    point_cloud: Optional[BasicPointCloud, dict]
+    point_cloud: Union[BasicPointCloud, dict]
     train_cameras: list
     test_cameras: list
     nerf_normalization: dict
-    ply_path: Optional[str, list]
+    ply_path: Union[str, dict]
     metadata: dict = dict()
     novel_view_cameras: list = None
 
@@ -90,9 +90,11 @@ def fetchPly(path):
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
     colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
     normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
-    if 't' in vertices.dtype.names:
+    if 't' in vertices:
         t = np.array(vertices['t'])
-    return BasicPointCloud(points=positions, colors=colors, normals=normals, t=t)
+    else:
+        t = None
+    return BasicPointCloud(points=positions, colors=colors, normals=normals, timestamps=t)
 
 def storePly(path, xyz, rgb, t=None):
     # set rgb to 0 - 255

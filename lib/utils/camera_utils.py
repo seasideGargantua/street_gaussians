@@ -35,6 +35,7 @@ class Camera(nn.Module):
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.K = K
+        self.fx, self.fy, self.cx, self.cy = self.K[0, 0], self.K[1, 1], self.K[0, 2], self.K[1, 2]
         self.image_name = image_name
         self.trans, self.scale = trans, scale
 
@@ -225,3 +226,17 @@ def make_rasterizer(
             
     rasterizer: GaussianRasterizer = GaussianRasterizer(raster_settings=raster_settings)
     return rasterizer
+
+def camera_cv2gl(R, T):
+    R = torch.tensor(R).float().cuda() # 3 x 3
+    T = torch.tensor(T).float().unsqueeze(1).cuda()  # 3 x 1
+    w2c = torch.eye(4, device=R.device, dtype=R.dtype)
+    w2c[:3, :3] = R.T
+    w2c[:3, 3:4] = T
+    c2w = w2c.inverse()
+    # flip the z and y axes to align with gsplat conventions
+    c2w[0:3, 1:3] *= -1
+    R_edit = torch.diag(torch.tensor([1, -1, -1], dtype=torch.float32)).cuda()
+    c2w_gl = c2w @ R_edit
+    viewmap = c2w.inverse()
+    return viewmat, c2w_gl[:3, 3:4]

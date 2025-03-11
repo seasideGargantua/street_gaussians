@@ -55,10 +55,17 @@ class GaussianModelDynamic(GaussianModel):
     def get_scaling_t(self):
         return self.scaling_activation(self._scaling_t)
 
-    def get_xyz(self, ts):
+    def get_delta_xyz(self, ts):
         dt = ts - self._t
-        delta_xyz = self.speed * dt
-        xyz = self._xyz + delta_xyz
+        self.delta_xyz = self.speed * dt
+        return self.delta_xyz
+
+    @property
+    def get_xyz(self, ts):
+        if hasattr(self, 'delta_xyz'):
+            xyz = self._xyz + self.delta_xyz
+        else:
+            xyz = self._xyz
         return xyz
 
     @property
@@ -78,16 +85,16 @@ class GaussianModelDynamic(GaussianModel):
         self.cov3ds, self.cov_t, self.speed = compute_4d_gaussians_covariance(self.get_scaling, self.get_scaling_t, self.get_rotation, self.get_rotation_r)
         return self.cov3ds
 
-    def get_opacity(self, ts=None):
+    def get_opacity(self, ts):
         dt = ts - self._t
         tshift = 0.5 * dt * dt / self.cov_t
         opacity = self.opacity_activation(self._opacity) * torch.exp(-tshift)
         return opacity
 
-    def get_rgbs(self, translation, ts):
+    def get_rgbs(self, translation):
         if self.active_sh_degree > 0:
             n = self.active_sh_degree
-            viewdirs = self.get_xyz(ts).detach() - translation  # (N, 1, 3)
+            viewdirs = self.get_xyz.detach() - translation  # (N, 1, 3)
             viewdirs = viewdirs / viewdirs.norm(dim=-1, keepdim=True)
             rgbs = spherical_harmonics_3d_fast(n, viewdirs, self.get_features)
         else:

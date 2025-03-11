@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 import os
+from mixplat.projection import compute_3d_gaussians_covariance
+from mixplat.sh import spherical_harmonics_3d_fast
 from lib.config import cfg
 from lib.utils.graphics_utils import BasicPointCloud
 from lib.datasets.base_readers import fetchPly
@@ -70,6 +72,21 @@ class GaussianModelBkgd(GaussianModel):
     def get_semantic(self):
         semantic = super().get_semantic
         return semantic if self.background_mask is None else semantic[self.background_mask]
+
+    @property
+    def get_cov3ds(self):
+        self.cov3ds = compute_3d_gaussians_covariance(self.get_scaling, self.get_rotation)
+        return self.cov3ds
+
+    def get_rgbs(self, translation):
+        if self.active_sh_degree > 0:
+            n = self.active_sh_degree
+            viewdirs = self.get_xyz.detach() - translation  # (N, 1, 3)
+            viewdirs = viewdirs / viewdirs.norm(dim=-1, keepdim=True)
+            rgbs = spherical_harmonics_3d_fast(n, viewdirs, self.get_features)
+        else:
+            rgbs = torch.sigmoid(self.get_features[:,0,:])
+        return rgbs
 
     def densify_and_prune(self, max_grad, min_opacity, prune_big_points):
         max_grad = cfg.optim.get('densify_grad_threshold_bkgd', max_grad)

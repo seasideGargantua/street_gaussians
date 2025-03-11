@@ -220,7 +220,7 @@ class MixGaussianModel(nn.Module):
             self.num_gaussians += num_gaussians_dynamic
             self.graph_gaussian_range['dynamic'] = [idx, idx + num_gaussians_dynamic]
             idx += num_gaussians_dynamic
-                    
+    
     @property
     def get_xyz(self):
         xyzs = []
@@ -231,21 +231,12 @@ class MixGaussianModel(nn.Module):
             
             xyzs.append(xyz_bkgd)
         
-        if len(self.graph_obj_list) > 0:
-            xyzs_local = []
-
-            for i, obj_name in enumerate(self.graph_obj_list):
-                obj_model: GaussianModelActor = getattr(self, obj_name)
-                xyz_local = obj_model.get_xyz
-                xyzs_local.append(xyz_local)
-                
-            xyzs_local = torch.cat(xyzs_local, dim=0)
-            if cfg.mode == 'train':
-                xyzs_local = xyzs_local.clone()
-                xyzs_local[self.flip_mask, self.flip_axis] *= -1
-            obj_rots = quaternion_to_matrix(self.obj_rots)
-            xyzs_obj = torch.einsum('bij, bj -> bi', obj_rots, xyzs_local) + self.obj_trans
-            xyzs.append(xyzs_obj)
+        if self.get_visibility('dynamic'):
+            xyz_dynamic = self.dynamic.get_xyz
+            if self.use_pose_correction:
+                xyz_dynamic = self.pose_correction.correct_gaussian_xyz(self.viewpoint_camera, xyz_dynamic)
+            
+            xyzs.append(xyz_dynamic)
 
         xyzs = torch.cat(xyzs, dim=0)
 
@@ -253,63 +244,52 @@ class MixGaussianModel(nn.Module):
     
     def get_colors(self, camera_center):
         colors = []
-
-        model_names = []
         if self.get_visibility('background'):
-            model_names.append('background')
-
-        model_names.extend(self.graph_obj_list)
-
-        for model_name in model_names:
-            if model_name == 'background':                
-                model: GaussianModel= getattr(self, model_name)
-            else:
-                model: GaussianModelActor = getattr(self, model_name)
-                
-            max_sh_degree = model.max_sh_degree
-            sh_dim = (max_sh_degree + 1) ** 2
-
-            if model_name == 'background':                  
-                shs = model.get_features.transpose(1, 2).view(-1, 3, sh_dim)
-            else:
-                features = model.get_features_fourier(self.frame)
-                shs = features.transpose(1, 2).view(-1, 3, sh_dim)
-
-            directions = model.get_xyz - camera_center
-            directions = directions / torch.norm(directions, dim=1, keepdim=True)
-            sh2rgb = eval_sh(max_sh_degree, shs, directions)
-            color = torch.clamp_min(sh2rgb + 0.5, 0.)
-            colors.append(color)
+            color_bkgd = self.background.get_rgb(camera_center)
+            colors.append(color_bkgd)
+        
+        if self.get_visibility('dynamic'):
+            color_dynamic = self.dynamic.get_rgb(camera_center)
+            colors.append(color_dynamic)
 
         colors = torch.cat(colors, dim=0)
         return colors
                     
-    @property
-    def get_opacity(self):
+    def get_opacity(self, ts):
         opacities = []
         
         if self.get_visibility('background'):
             opacity_bkgd = self.background.get_opacity
             opacities.append(opacity_bkgd)
 
-        for obj_name in self.graph_obj_list:
-            obj_model: GaussianModelActor = getattr(self, obj_name)
-            
-            opacity = obj_model.get_opacity
-        
-            opacities.append(opacity)
+        if self.get_visibility('dynamic'):
+            opacity_dynamic = self.dynamic.get_opacity(ts)
+            opacities.append(opacity_dynamic)
         
         opacities = torch.cat(opacities, dim=0)
         return opacities
-            
-    def get_covariance(self, scaling_modifier = 1):
-        scaling = self.get_scoaling # [N, 1]
-        rotation = self.get_rotation # [N, 4]
-        L = build_scaling_rotation(scaling_modifier * scaling, rotation)
-        actual_covariance = L @ L.transpose(1, 2)
-        symm = strip_symmetric(actual_covariance)
-        return symm
     
+    @property
+    def get_cov3ds(self):
+        cov3ds = []
+        if self.get_visibility('background'):
+            cov3ds_bkgd = self.background.get_cov3ds
+            cov3ds.append(cov3ds_bkgd)
+        
+        if self.get_visibility('dynamic'):
+            cov3ds_dynamic = self.dynamic.get_xyz
+            cov3ds.append(cov3ds_dynamic)
+
+        cov3ds = torch.cat(cov3ds, dim=0)
+        return cov3ds
+    
+    def process_render(self, ts, camera_center):
+        cov3ds = self.get_cov3ds
+        xyzs = self.get_xyz
+        rgbs = self.get_colors(camera_center)
+        opacity = self.get_opacity(ts)
+        return cov3ds, xyzs, rgbs, opacity
+
     def get_normals(self, camera: Camera):
         normals = []
         

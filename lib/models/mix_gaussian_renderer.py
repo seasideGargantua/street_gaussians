@@ -155,10 +155,7 @@ class MixGaussianRenderer():
         viewmat, T = camera_cv2gl(viewpoint_camera.R, viewpoint_camera.T)
 
         timestamp = viewpoint_camera.meta['timestamp']
-        xyzs = pc.get_xyz(T.T, timestamp)
-        cov3ds = pc.get_cov3ds(T.T, timestamp)
-        rgbs = pc.get_rgbs(T.T, timestamp)
-        opacity = pc.get_opacity(timestamp)
+        cov3ds, xyzs, rgbs, opacity = pc.process_render(ts, T)
 
         # Set up rasterization configuration and make rasterizer
         bg_color = [1, 1, 1] if white_background else [0, 0, 0]

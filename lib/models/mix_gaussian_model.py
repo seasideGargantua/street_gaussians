@@ -75,7 +75,7 @@ class MixGaussianModel(nn.Module):
             else:
                 return False
         elif model_name == 'dynamic':
-            if model_name in self.include_list and self.include_obj:
+            if model_name in self.include_list and self.include_dynamic:
                 return True
             else:
                 return False
@@ -172,7 +172,11 @@ class MixGaussianModel(nn.Module):
         if self.include_dynamic:
             self.dynamic = GaussianModelDynamic(
                 model_name='dynamic',
+                frame_nums=self.metadata['num_frames']
             )
+
+            self.model_name_id['dynamic'] = 1
+            self.models_num += 1
 
         # Build sky model
         if self.include_sky:
@@ -245,11 +249,11 @@ class MixGaussianModel(nn.Module):
     def get_colors(self, camera_center):
         colors = []
         if self.get_visibility('background'):
-            color_bkgd = self.background.get_rgb(camera_center)
+            color_bkgd = self.background.get_rgbs(camera_center)
             colors.append(color_bkgd)
         
         if self.get_visibility('dynamic'):
-            color_dynamic = self.dynamic.get_rgb(camera_center)
+            color_dynamic = self.dynamic.get_rgbs(camera_center)
             colors.append(color_dynamic)
 
         colors = torch.cat(colors, dim=0)
@@ -277,7 +281,7 @@ class MixGaussianModel(nn.Module):
             cov3ds.append(cov3ds_bkgd)
         
         if self.get_visibility('dynamic'):
-            cov3ds_dynamic = self.dynamic.get_xyz
+            cov3ds_dynamic = self.dynamic.get_cov3ds
             cov3ds.append(cov3ds_dynamic)
 
         cov3ds = torch.cat(cov3ds, dim=0)
@@ -381,16 +385,21 @@ class MixGaussianModel(nn.Module):
             model.xyz_gradient_accum[visibility_model, 0:1] += torch.norm(viewspace_point_tensor_grad_model[visibility_model, :2], dim=-1, keepdim=True)
             model.xyz_gradient_accum[visibility_model, 1:2] += torch.norm(viewspace_point_tensor_grad_model[visibility_model, 2:], dim=-1, keepdim=True)
             model.denom[visibility_model] += 1
+            if model_name == 'dynamic':
+                model.t_gradient_accum[visibility_model] += model._t.grad.clone()[visibility_model].detach()
         
-    def densify_and_prune(self, max_grad, min_opacity, prune_big_points, exclude_list=[]):
+    def densify_and_prune(self, ts, max_grad, max_grad_t, min_opacity, prune_big_points, exclude_list=[]):
         scalars = None
         tensors = None
         for model_name in self.model_name_id.keys():
             if startswith_any(model_name, exclude_list):
                 continue
             model: GaussianModel = getattr(self, model_name)
+            if model_name == 'dynamic':
+                scalars_, tensors_ = model.densify_and_prune(ts, max_grad, max_grad_t, min_opacity, prune_big_points)
+            else:
+                scalars_, tensors_ = model.densify_and_prune(max_grad, min_opacity, prune_big_points)
 
-            scalars_, tensors_ = model.densify_and_prune(max_grad, min_opacity, prune_big_points)
             if model_name == 'background':
                 scalars = scalars_
                 tensors = tensors_

@@ -111,20 +111,20 @@ def training():
             scalar_dict['sky_loss'] = sky_loss.item()
             loss += optim_args.lambda_sky * sky_loss
         
-        if optim_args.lambda_reg > 0 and gaussians.include_obj and iteration >= optim_args.densify_until_iter:
-            render_pkg_obj = gaussians_renderer.render_object(viewpoint_cam, gaussians, parse_camera_again=False)
-            image_obj, acc_obj = render_pkg_obj["rgb"], render_pkg_obj['acc']
-            acc_obj = torch.clamp(acc_obj, min=1e-6, max=1.-1e-6)
-            obj_acc_loss = torch.where(obj_bound, 
-                -(acc_obj * torch.log(acc_obj) +  (1. - acc_obj) * torch.log(1. - acc_obj)), 
-                -torch.log(1. - acc_obj)).mean()
-            scalar_dict['obj_acc_loss'] = obj_acc_loss.item()
-            loss += optim_args.lambda_reg * obj_acc_loss
+        if optim_args.lambda_reg > 0 and gaussians.include_dynamic and iteration >= optim_args.densify_until_iter:
+            render_pkg_dynamic = gaussians_renderer.render_dynamic(viewpoint_cam, gaussians, parse_camera_again=False)
+            image_dynamic, acc_dynamic = render_pkg_dynamic["rgb"], render_pkg_dynamic['acc']
+            acc_dynamic = torch.clamp(acc_dynamic, min=1e-6, max=1.-1e-6)
+            dynamic_acc_loss = torch.where(obj_bound, 
+                -(acc_dynamic * torch.log(acc_dynamic) +  (1. - acc_dynamic) * torch.log(1. - acc_dynamic)), 
+                -torch.log(1. - acc_dynamic)).mean()
+            scalar_dict['dynamic_acc_loss'] = dynamic_acc_loss.item()
+            loss += optim_args.lambda_reg * dynamic_acc_loss
 
         # lidar depth loss
-        if optim_args.lambda_depth_lidar > 0 and lidar_depth is not None:            
+        if optim_args.lambda_depth_lidar > 0 and lidar_depth is not None:       
             depth_mask = torch.logical_and((lidar_depth > 0.), mask)
-            expected_depth = depth / (render_pkg['acc'] + 1e-10)  
+            expected_depth = depth / (render_pkg['acc'] + 1e-10)
             depth_error = torch.abs((expected_depth[depth_mask] - lidar_depth[depth_mask]))
             depth_error, _ = torch.topk(depth_error, int(0.95 * depth_error.size(0)), largest=False)
             lidar_depth_loss = depth_error.mean()
@@ -153,10 +153,10 @@ def training():
             row0 = torch.cat([gt_image, image, depth_colored], dim=2)
             acc = acc.repeat(3, 1, 1)
             with torch.no_grad():
-                render_pkg_obj = gaussians_renderer.render_object(viewpoint_cam, gaussians)
-                image_obj, acc_obj = render_pkg_obj["rgb"], render_pkg_obj['acc']
-            acc_obj = acc_obj.repeat(3, 1, 1)
-            row1 = torch.cat([acc, image_obj, acc_obj], dim=2)
+                render_pkg_dynamic = gaussians_renderer.render_dynamic(viewpoint_cam, gaussians)
+                image_dynamic, acc_dynamic = render_pkg_dynamic["rgb"], render_pkg_dynamic['acc']
+            acc_dynamic = acc_dynamic.repeat(3, 1, 1)
+            row1 = torch.cat([acc, image_dynamic, acc_dynamic], dim=2)
             image_to_show = torch.cat([row0, row1], dim=1)
             image_to_show = torch.clamp(image_to_show, 0.0, 1.0)
             os.makedirs(f"{cfg.model_path}/log_images", exist_ok = True)
@@ -194,7 +194,9 @@ def training():
                 if iteration > optim_args.densify_from_iter:
                     if iteration % optim_args.densification_interval == 0:
                         scalars, tensors = gaussians.densify_and_prune(
+                            ts=viewpoint_cam.meta['timestamp'],
                             max_grad=optim_args.densify_grad_threshold,
+                            max_grad_t=optim_args.densify_grad_threshold_t,
                             min_opacity=optim_args.min_opacity,
                             prune_big_points=prune_big_points,
                         )

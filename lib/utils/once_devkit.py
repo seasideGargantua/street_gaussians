@@ -66,8 +66,7 @@ class ONCE(object):
 
     def load_image(self, frame_id, cam_name):
         cam_path = osp.join(self.data_root, self.seq_id, cam_name, '{}.jpg'.format(frame_id))
-        img_buf = cv2.cvtColor(cv2.imread(cam_path), cv2.COLOR_BGR2RGB) / 255.
-        return img_buf
+        return Image.open(cam_path)
 
     def load_sky_mask(self, frame_id, cam_name):
         cam_path = osp.join(self.data_root, self.seq_id, 'sky_mask', cam_name, '{}.jpg'.format(frame_id))

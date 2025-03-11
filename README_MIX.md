@@ -12,11 +12,11 @@ git clone https://github.com/seasideGargantua/street_gaussians.git
 
 ```
 # Set conda environment
-conda create -n mix-gaussian python=3.10
+conda create -n mix-gaussian python=3.12
 conda activate mix-gaussian
 
 # Install torch (corresponding to your CUDA version)
-pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.2.1 torchvision==0.17.1 torchaudio==2.2.1 --index-url https://download.pytorch.org/whl/cu121
 
 # Install requirements
 pip install -r requirements.txt

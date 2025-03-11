@@ -2,8 +2,8 @@ import os
 import random
 import json
 from lib.utils.camera_utils import camera_to_JSON, cameraList_from_camInfos
+from lib.utils.graphics_utils import BasicPointCloud
 from lib.config import cfg
-from lib.graphics_utils import BasicPointCloud
 from lib.datasets.base_readers import storePly, SceneInfo
 from lib.datasets.colmap_readers import readColmapSceneInfo
 from lib.datasets.blender_readers import readNerfSyntheticInfo
@@ -34,7 +34,7 @@ class Dataset():
 
         if cfg.mode == 'train':
             print(f'Saving input pointcloud to {os.path.join(self.model_path, "input.ply")}')
-            if isinstace(scene_info.point_cloud, BasicPointCloud):
+            if isinstance(scene_info.point_cloud, BasicPointCloud):
                 pcd = scene_info.point_cloud
             elif isinstance(scene_info.point_cloud, dict):
                 pcd = scene_info.point_cloud['bkgd']

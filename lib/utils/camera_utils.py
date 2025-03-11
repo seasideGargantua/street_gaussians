@@ -237,6 +237,11 @@ def camera_cv2gl(R, T):
     # flip the z and y axes to align with gsplat conventions
     c2w[0:3, 1:3] *= -1
     R_edit = torch.diag(torch.tensor([1, -1, -1], dtype=torch.float32)).cuda()
-    c2w_gl = c2w @ R_edit
-    viewmap = c2w.inverse()
-    return viewmat, c2w_gl[:3, 3:4]
+    R = c2w[:3, :3] @ R_edit
+    T = c2w[:3, 3:4]
+    R_inv = R.T
+    T_inv = -R_inv @ T
+    viewmat = torch.eye(4, device=R.device, dtype=R.dtype)
+    viewmat[:3, :3] = R_inv
+    viewmat[:3, 3:4] = T_inv
+    return viewmat, T.T

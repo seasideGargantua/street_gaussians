@@ -44,14 +44,14 @@ class MixGaussianRenderer():
     def render_dynamic(
         self, 
         viewpoint_camera: Camera,
-        pc: StreetGaussianModel,
+        pc: MixGaussianModel,
         convert_SHs_python = None, 
         compute_cov3D_python = None, 
         scaling_modifier = None, 
         override_color = None,
         parse_camera_again: bool = True,
     ):        
-        pc.set_visibility(include_list=pc.obj_list)
+        pc.set_visibility(include_list=['dynamic'])
         if parse_camera_again: pc.parse_camera(viewpoint_camera)        
         result = self.render_kernel(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color, white_background=True)
 
@@ -60,7 +60,7 @@ class MixGaussianRenderer():
     def render_background(
         self, 
         viewpoint_camera: Camera,
-        pc: StreetGaussianModel,
+        pc: MixGaussianModel,
         convert_SHs_python = None, 
         compute_cov3D_python = None, 
         scaling_modifier = None, 
@@ -76,7 +76,7 @@ class MixGaussianRenderer():
     def render_sky(
         self, 
         viewpoint_camera: Camera,
-        pc: StreetGaussianModel,
+        pc: MixGaussianModel,
         convert_SHs_python = None, 
         compute_cov3D_python = None, 
         scaling_modifier = None, 
@@ -91,7 +91,7 @@ class MixGaussianRenderer():
     def render(
         self, 
         viewpoint_camera: Camera,
-        pc: StreetGaussianModel,
+        pc: MixGaussianModel,
         convert_SHs_python = None, 
         compute_cov3D_python = None, 
         scaling_modifier = None, 
@@ -124,7 +124,7 @@ class MixGaussianRenderer():
     def render_kernel(
         self, 
         viewpoint_camera: Camera,
-        pc: StreetGaussianModel,
+        pc: MixGaussianModel,
         convert_SHs_python = None, 
         compute_cov3D_python = None, 
         scaling_modifier = None, 
@@ -155,7 +155,7 @@ class MixGaussianRenderer():
         viewmat, T = camera_cv2gl(viewpoint_camera.R, viewpoint_camera.T)
 
         timestamp = viewpoint_camera.meta['timestamp']
-        cov3ds, xyzs, rgbs, opacity = pc.process_render(ts, T)
+        cov3ds, xyzs, rgbs, opacity = pc.process_render(timestamp, T)
 
         # Set up rasterization configuration and make rasterizer
         bg_color = [1, 1, 1] if white_background else [0, 0, 0]
@@ -166,7 +166,7 @@ class MixGaussianRenderer():
         xys, depths, radii, conics, _, num_tiles_hit = project_gaussians(  # type: ignore
             xyzs,
             cov3ds,
-            viewmat.squeeze()[:3, :],
+            viewmat[:3, :],
             viewpoint_camera.fx,
             viewpoint_camera.fy,
             viewpoint_camera.cx,
@@ -189,21 +189,21 @@ class MixGaussianRenderer():
                     num_tiles_hit,
                     rgbs,
                     opacity,
-                    H,
-                    W,
+                    viewpoint_camera.image_height,
+                    viewpoint_camera.image_width,
                     16,
                     background=bg_color,
                     return_alpha=True,
                     return_invdepth=True,
                 )
-        # rendered_color = rendered_color.permute(2, 0, 1)
+        rendered_color = rendered_color.permute(2, 0, 1)
         # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
         # They will be excluded from value updates used in the splitting criteria.
         
         result = {
             "rgb": rendered_color,
             "acc": rendered_acc,
-            "depth": 1. / invdepth,
+            "depth": 1. / invdepth.unsqueeze(0),
             "viewspace_points": xys,
             "visibility_filter" : radii > 0,
             "radii": radii

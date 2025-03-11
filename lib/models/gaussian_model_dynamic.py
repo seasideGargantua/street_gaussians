@@ -6,7 +6,7 @@ from mixplat.projection import compute_4d_gaussians_covariance
 from mixplat.sh import spherical_harmonics_3d_fast
 from lib.config import cfg
 from lib.models.gaussian_model import GaussianModel
-from lib.utils.general_utils import quaternion_to_matrix, inverse_sigmoid, matrix_to_quaternion, get_expon_lr_func, quaternion_raw_multiply
+from lib.utils.general_utils import quaternion_to_matrix, inverse_sigmoid, matrix_to_quaternion, get_expon_lr_func, quaternion_raw_multiply, build_rotation_4d, build_scaling_rotation_4d
 from lib.utils.sh_utils import RGB2SH, IDFT
 from lib.datasets.base_readers import fetchPly
 from plyfile import PlyData, PlyElement
@@ -16,11 +16,13 @@ class GaussianModelDynamic(GaussianModel):
     def __init__(
         self, 
         model_name,
+        frame_nums,
         time_duration_start=0.0,
         time_duration_end=1.0,
         init_scale_f=15,
         perframe_sparse_scale_t_mult=1.0,
     ):  
+        self.frame_nums = frame_nums
         # fourier spherical harmonics
         self.fourier_dim = cfg.model.gaussian.get('fourier_dim', 1)
         self.fourier_scale = cfg.model.gaussian.get('fourier_scale', 1.)
@@ -33,7 +35,6 @@ class GaussianModelDynamic(GaussianModel):
         super().__init__(model_name=model_name, num_classes=num_classes)
     
         self.spatial_lr_scale = extent
-        self.max_sh_degree_t = max_sh_degree_t
 
         self.cov3ds = torch.empty(0)
         self.cov_t = torch.empty(0)
@@ -61,7 +62,7 @@ class GaussianModelDynamic(GaussianModel):
         return self.delta_xyz
 
     @property
-    def get_xyz(self, ts):
+    def get_xyz(self):
         if hasattr(self, 'delta_xyz'):
             xyz = self._xyz + self.delta_xyz
         else:
@@ -113,14 +114,13 @@ class GaussianModelDynamic(GaussianModel):
         return features
            
     def create_from_pcd(self, pcd, spatial_lr_scale):
-        pcd = fetchPly(pointcloud_path)
         pointcloud_xyz = np.asarray(pcd.points)
         pointcloud_rgb = np.asarray(pcd.colors)
-        pointcloud_time = np.asarray(pcd.timestamp)
+        pointcloud_time = np.asarray(pcd.timestamps)
         
         fused_point_cloud = torch.tensor(np.asarray(pointcloud_xyz)).float().cuda()
         fused_color = RGB2SH(torch.tensor(np.asarray(pointcloud_rgb)).float().cuda())
-        fused_times = torch.tensor(pointcloud_time).float().cuda()
+        fused_times = torch.tensor(pointcloud_time).unsqueeze(1).float().cuda()
 
         features_dc = torch.zeros((fused_color.shape[0], 3, self.fourier_dim)).float().cuda()
         features_rest = torch.zeros(fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1).float().cuda()
@@ -131,7 +131,7 @@ class GaussianModelDynamic(GaussianModel):
         scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 3)
 
         duration = self.time_duration_end - self.time_duration_start
-        frame_time = duration / (self.obj_end_frame - self.obj_start_frame)
+        frame_time = duration / self.frame_nums
         init_scale_t = ((frame_time * self.init_scale_f * self.perframe_sparse_scale_t_mult) ** 2 / (np.log(0.05) / -0.5)) ** 2
         dist_t = torch.zeros_like(fused_times, device="cuda") + init_scale_t
         scales_t = torch.log(torch.sqrt(dist_t))
@@ -165,16 +165,21 @@ class GaussianModelDynamic(GaussianModel):
         args = cfg.optim
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 2), device="cuda")
+        self.t_gradient_accum = torch.zeros((self._xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.active_sh_degree = 0
                 
-        tag = 'obj'
+        tag = 'dynamic'
         position_lr_init = args.get('position_lr_init_{}'.format(tag), args.position_lr_init)
         position_lr_final = args.get('position_lr_final_{}'.format(tag), args.position_lr_final)
+        t_lr_init = args.get('t_lr_init_{}'.format(tag), args.t_lr_init)
+        t_lr_final = args.get('t_lr_final_{}'.format(tag), args.t_lr_final)
         scaling_lr = args.get('scaling_lr_{}'.format(tag), args.scaling_lr)
+        scaling_t_lr = args.get('scaling_t_lr_{}'.format(tag), args.scaling_lr)
         feature_lr = args.get('feature_lr_{}'.format(tag), args.feature_lr)
         semantic_lr = args.get('semantic_lr_{}'.format(tag), args.semantic_lr)
         rotation_lr = args.get('rotation_lr_{}'.format(tag), args.rotation_lr)
+        rotation_r_lr = args.get('rotation_r_lr_{}'.format(tag), args.rotation_lr)
         opacity_lr = args.get('opacity_lr_{}'.format(tag), args.opacity_lr)
         feature_rest_lr = args.get('feature_rest_lr_{}'.format(tag), feature_lr / 20.0)
 
@@ -186,9 +191,13 @@ class GaussianModelDynamic(GaussianModel):
             {'params': [self._scaling], 'lr': scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': rotation_lr, "name": "rotation"},
             {'params': [self._semantic], 'lr': semantic_lr, "name": "semantic"},
+            {'params': [self._rotation_r], 'lr': rotation_r_lr, "name": "rotation_r"},
+            {'params': [self._t], 'lr': t_lr_init, "name": "t"},
+            {'params': [self._scaling_t], 'lr': scaling_t_lr, "name": "scaling_t"},
         ]
         
         self.percent_dense = args.percent_dense
+        self.percent_dense_t = args.percent_dense_t
         self.percent_big_ws = args.percent_big_ws
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(
@@ -197,31 +206,38 @@ class GaussianModelDynamic(GaussianModel):
             lr_delay_mult=args.position_lr_delay_mult,
             max_steps=args.position_lr_max_steps
         )
-        
+        self.t_scheduler_args = get_expon_lr_func(
+            lr_init=t_lr_init,
+            lr_final=t_lr_final,
+            lr_delay_mult=0.01,
+            max_steps=30000
+        )
+
         self.densify_and_prune_list = ['xyz, f_dc, f_rest, opacity, scaling, rotation, semantic']
         self.scalar_dict = dict()
         self.tensor_dict = dict()  
             
-    def densify_and_prune(self, max_grad, min_opacity, prune_big_points):
-        if not (self.random_initialization or self.deformable):
-            max_grad = cfg.optim.get('densify_grad_threshold_obj', max_grad)
-            if cfg.optim.get('densify_grad_abs_obj', False):
-                grads = self.xyz_gradient_accum[:, 1:2] / self.denom
-            else:
-                grads = self.xyz_gradient_accum[:, 0:1] / self.denom
+    def densify_and_prune(self, ts, max_grad, max_grad_t, min_opacity, prune_big_points):
+        max_grad = cfg.optim.get('densify_grad_threshold_dynamic', max_grad)
+        if cfg.optim.get('densify_grad_abs_dynamic', False):
+            grads = self.xyz_gradient_accum[:, 1:2] / self.denom
         else:
             grads = self.xyz_gradient_accum[:, 0:1] / self.denom
         
         grads[grads.isnan()] = 0.0
 
+        grads_t = self.t_gradient_accum / self.denom
+        grads_t[grads_t.isnan()] = 0.0
+        grads_t = grads_t.squeeze()
+
         # Clone and Split
         # extent = self.get_extent()
         extent = self.extent
-        self.densify_and_clone(grads, max_grad, extent)
-        self.densify_and_split(grads, max_grad, extent)
+        self.densify_and_clone(grads, grads_t, max_grad, max_grad_t, extent)
+        self.densify_and_split(grads, grads_t, max_grad, max_grad_t, extent)
 
         # Prune points below opacity
-        prune_mask = (self.get_opacity < min_opacity).squeeze()
+        prune_mask = (self.get_opacity(ts) < min_opacity).squeeze()
         
         if prune_big_points:
             # Prune big points in world space
@@ -254,6 +270,7 @@ class GaussianModelDynamic(GaussianModel):
         
         # Reset
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 2), device="cuda")
+        self.t_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
@@ -263,9 +280,7 @@ class GaussianModelDynamic(GaussianModel):
     
     def prune_points(self, mask):
         valid_points_mask = ~mask
-        prune_list = ['xyz', 'f_dc', 'f_rest', 'opacity', 'scaling', 'rotation']
-        if not self.is_rigid:
-            prune_list += ['t', 'scaling_t', 'rotation_r']
+        prune_list = ['xyz', 'f_dc', 'f_rest', 'opacity', 'scaling', 'rotation', 't', 'scaling_t', 'rotation_r']
         optimizable_tensors = self.prune_optimizer(valid_points_mask, prune_list = prune_list)
 
         self._xyz = optimizable_tensors["xyz"]
@@ -279,6 +294,7 @@ class GaussianModelDynamic(GaussianModel):
         self._t = optimizable_tensors["t"]
         self._scaling_t = optimizable_tensors["scaling_t"]
         self._rotation_r = optimizable_tensors["rotation_r"]
+        self.cov_t = self.cov_t[valid_points_mask]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
@@ -286,7 +302,7 @@ class GaussianModelDynamic(GaussianModel):
         self.t_gradient_accum = self.t_gradient_accum[valid_points_mask]
 
     def densify_and_split(self, grads, grads_t, grad_threshold, grad_threshold_t, scene_extent, N=2):
-        n_init_points = self.get_xyz().shape[0]
+        n_init_points = self.get_xyz.shape[0]
                 
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
@@ -326,6 +342,9 @@ class GaussianModelDynamic(GaussianModel):
         new_t = new_xyzt[...,3:4]
         new_scaling_t = self.scaling_inverse_activation(self.get_scaling_t[selected_pts_mask].repeat(N, 1) / (0.8 * N))
         new_rotation_r = self._rotation_r[selected_pts_mask].repeat(N, 1)
+
+        new_cov_t = self.cov_t[selected_pts_mask].repeat(N, 1)
+        self.cov_t = torch.cat([self.cov_t, new_cov_t], dim=0)
 
         densification_dict = {
             "xyz": new_xyz, 
@@ -370,6 +389,9 @@ class GaussianModelDynamic(GaussianModel):
         new_scaling_t = self._scaling_t[selected_pts_mask]
         new_rotation_r = self._rotation_r[selected_pts_mask]
 
+        new_cov_t = self.cov_t[selected_pts_mask]
+        self.cov_t = torch.cat([self.cov_t, new_cov_t], dim=0)
+
         densification_dict = {
             "xyz": new_xyz, 
             "f_dc": new_features_dc, 
@@ -378,6 +400,7 @@ class GaussianModelDynamic(GaussianModel):
             "scaling" : new_scaling, 
             "rotation" : new_rotation,
             "t": new_t,
+            "cov_t": new_cov_t,
             "scaling_t": new_scaling_t,
             "rotation_r": new_rotation_r,
         }
@@ -398,8 +421,8 @@ class GaussianModelDynamic(GaussianModel):
         self._rotation_r = optimizable_tensors["rotation_r"]
 
         if reset_params:
-            cat_points_num = self.get_xyz().shape[0] - self.xyz_gradient_accum.shape[0]
-            self.xyz_gradient_accum = torch.cat([self.xyz_gradient_accum, torch.zeros(cat_points_num, 1).cuda()], dim=0)
+            cat_points_num = self.get_xyz.shape[0] - self.xyz_gradient_accum.shape[0]
+            self.xyz_gradient_accum = torch.cat([self.xyz_gradient_accum, torch.zeros(cat_points_num, 2).cuda()], dim=0)
             self.t_gradient_accum = torch.cat([self.t_gradient_accum, torch.zeros(cat_points_num, 1).cuda()], dim=0)
             self.denom = torch.cat([self.denom, torch.zeros(cat_points_num, 1).cuda()], dim=0)
             self.max_radii2D = torch.cat([self.max_radii2D, torch.zeros(cat_points_num).cuda()], dim=0)

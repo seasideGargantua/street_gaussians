@@ -86,10 +86,13 @@ class GaussianModelDynamic(GaussianModel):
         self.cov3ds, self.cov_t, self.speed = compute_4d_gaussians_covariance(self.get_scaling, self.get_scaling_t, self.get_rotation, self.get_rotation_r)
         return self.cov3ds
 
-    def get_opacity(self, ts):
-        dt = ts - self._t
-        tshift = 0.5 * dt * dt / self.cov_t
-        opacity = self.opacity_activation(self._opacity) * torch.exp(-tshift)
+    def get_opacity(self, ts=None):
+        if ts is not None:
+            dt = ts - self._t
+            tshift = 0.5 * dt * dt / self.cov_t
+            opacity = self.opacity_activation(self._opacity) * torch.exp(-tshift)
+        else:
+            opacity = self.opacity_activation(self._opacity)
         return opacity
 
     def get_rgbs(self, translation):
@@ -238,34 +241,6 @@ class GaussianModelDynamic(GaussianModel):
 
         # Prune points below opacity
         prune_mask = (self.get_opacity(ts) < min_opacity).squeeze()
-        
-        if prune_big_points:
-            # Prune big points in world space
-            extent = self.extent
-            big_points_ws = self.get_scaling.max(dim=1).values > extent * self.percent_big_ws
-            
-            # Prune points outside the tracking box
-            repeat_num = 2
-            stds = self.get_scaling
-            stds = stds[:, None, :].expand(-1, repeat_num, -1) # [N, M, 1] 
-            means = torch.zeros_like(self.get_xyz)
-            means = means[:, None, :].expand(-1, repeat_num, -1) # [N, M, 3]
-            samples = torch.normal(mean=means, std=stds) # [N, M, 3]
-            rots = quaternion_to_matrix(self.get_rotation) # [N, 3, 3]
-            rots = rots[:, None, :, :].expand(-1, repeat_num, -1, -1) # [N, M, 3, 3]
-            origins = self.get_xyz[:, None, :].expand(-1, repeat_num, -1) # [N, M, 3]
-                        
-            samples_xyz = torch.matmul(rots, samples.unsqueeze(-1)).squeeze(-1) + origins # [N, M, 3]                    
-            num_gaussians = self.get_xyz.shape[0]
-            points_inside_box = torch.logical_and(
-                torch.all((samples_xyz >= self.min_xyz).view(num_gaussians, -1), dim=-1),
-                torch.all((samples_xyz <= self.max_xyz).view(num_gaussians, -1), dim=-1),
-            )
-            points_outside_box = torch.logical_not(points_inside_box)           
-            
-            prune_mask = torch.logical_or(prune_mask, big_points_ws)
-            prune_mask = torch.logical_or(prune_mask, points_outside_box)
-            
         self.prune_points(prune_mask)
         
         # Reset
@@ -323,10 +298,6 @@ class GaussianModelDynamic(GaussianModel):
 
         selected_pts_mask = torch.logical_or(selected_pts_mask, selected_pts_mask_t)
 
-        self.scalar_dict['points_split'] = selected_pts_mask.sum().item()
-        print(f'Number of points to split: {selected_pts_mask.sum()}')
-
-        
         new_scaling = self.scaling_inverse_activation(self.get_scaling[selected_pts_mask].repeat(N, 1) / (0.8 * N))
         new_rotation = self._rotation[selected_pts_mask].repeat(N, 1)
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
@@ -374,9 +345,6 @@ class GaussianModelDynamic(GaussianModel):
             self.get_scaling_t.squeeze() <= self.percent_dense_t)
 
         selected_pts_mask = torch.logical_or(selected_pts_mask, selected_pts_mask_t)
-
-        self.scalar_dict['points_clone'] = selected_pts_mask.sum().item()
-        print(f'Number of points to clone: {selected_pts_mask.sum()}')
         
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
@@ -429,4 +397,9 @@ class GaussianModelDynamic(GaussianModel):
 
     def set_max_radii(self, visibility_dynamic, max_radii2D):
         self.max_radii2D[visibility_dynamic] = torch.max(self.max_radii2D[visibility_dynamic], max_radii2D[visibility_dynamic])
-        
+    
+    def reset_opacity(self):
+        opacities_new = inverse_sigmoid(torch.min(self.get_opacity(), torch.ones_like(self.get_opacity()) * 0.01))
+        d = {'opacity': opacities_new}
+        optimizable_tensors = self.reset_optimizer(d)
+        self._opacity = optimizable_tensors["opacity"]

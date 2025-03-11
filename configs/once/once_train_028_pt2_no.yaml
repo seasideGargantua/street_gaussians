@@ -15,8 +15,6 @@ data:
   extent: 10
   use_colmap: true
   filter_colmap: true
-  stop_mask: 100000
-  skip_obj: True
 
 model:
   gaussian:
@@ -74,8 +72,8 @@ optim:
   lambda_sky: 0.05
   lambda_sky_scale: [1, 1, 0]
   lambda_mask: 0.1
-  lambda_reg: 0.
-  lambda_depth_lidar: 0.
+  lambda_reg: 0.01
+  lambda_depth_lidar: 0.01
   lambda_rmobj: 0.01
 
   track_position_lr_delay_mult: 0.01

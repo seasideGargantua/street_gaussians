@@ -203,7 +203,7 @@ class MixGaussianRenderer():
         result = {
             "rgb": rendered_color,
             "acc": rendered_acc,
-            "depth": 1. / invdepth.unsqueeze(0),
+            "depth": invdepth.unsqueeze(0),
             "viewspace_points": xys,
             "visibility_filter" : radii > 0,
             "radii": radii

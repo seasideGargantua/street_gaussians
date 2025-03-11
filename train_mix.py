@@ -124,8 +124,8 @@ def training():
         # lidar depth loss
         if optim_args.lambda_depth_lidar > 0 and lidar_depth is not None:       
             depth_mask = torch.logical_and((lidar_depth > 0.), mask)
-            expected_depth = depth / (render_pkg['acc'] + 1e-10)
-            depth_error = torch.abs((expected_depth[depth_mask] - lidar_depth[depth_mask]))
+            # expected_depth = depth / (render_pkg['acc'] + 1e-10)
+            depth_error = torch.abs((depth[depth_mask] - 1. / lidar_depth[depth_mask]))
             depth_error, _ = torch.topk(depth_error, int(0.95 * depth_error.size(0)), largest=False)
             lidar_depth_loss = depth_error.mean()
             scalar_dict['lidar_depth_loss'] = lidar_depth_loss
@@ -205,11 +205,11 @@ def training():
                         tensor_dict.update(tensors)
                         
             # Reset opacity
-            if iteration < optim_args.densify_until_iter:
-                if iteration % optim_args.opacity_reset_interval == 0:
-                    gaussians.reset_opacity()
-                if data_args.white_background and iteration == optim_args.densify_from_iter:
-                    gaussians.reset_opacity()
+            # if iteration < optim_args.densify_until_iter:
+            #     if iteration % optim_args.opacity_reset_interval == 0:
+            #         gaussians.reset_opacity(exclude_list=['dynamic'])
+            #     if data_args.white_background and iteration == optim_args.densify_from_iter:
+            #         gaussians.reset_opacity(exclude_list=['dynamic'])
 
             training_report(tb_writer, iteration, scalar_dict, tensor_dict, training_args.test_iterations, scene, gaussians_renderer)
 

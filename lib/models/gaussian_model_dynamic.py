@@ -219,7 +219,47 @@ class GaussianModelDynamic(GaussianModel):
         self.densify_and_prune_list = ['xyz, f_dc, f_rest, opacity, scaling, rotation, semantic']
         self.scalar_dict = dict()
         self.tensor_dict = dict()  
-            
+    
+    def state_dict(self, is_final=False):
+        state_dict = super().state_dict(is_final=is_final)
+        state_dict_nonrigid = {
+            'scaling_t': self._scaling_t,
+            'rotation_r': self._rotation_r,
+            't': self._t,
+        }
+        state_dict.update(state_dict_nonrigid)
+        
+        return state_dict
+
+    def load_state_dict(self, state_dict):  
+        self._xyz = state_dict['xyz']  
+        self._t = state_dict['t']
+        self._features_dc = state_dict['feature_dc']
+        self._features_rest = state_dict['feature_rest']
+        self._scaling = state_dict['scaling']
+        self._scaling_t = state_dict['scaling_t']
+        self._rotation = state_dict['rotation']
+        self._rotation_r = state_dict['rotation_r']
+        self._opacity = state_dict['opacity']
+        self._semantic = state_dict['semantic']
+        
+        if cfg.mode == 'train':
+            self.training_setup()
+            if 'spatial_lr_scale' in state_dict:
+                self.spatial_lr_scale = state_dict['spatial_lr_scale'] 
+            if 'denom' in state_dict:
+                self.denom = state_dict['denom'] 
+            if 'max_radii2D' in state_dict:
+                self.max_radii2D = state_dict['max_radii2D'] 
+            if 'xyz_gradient_accum' in state_dict:
+                self.xyz_gradient_accum = state_dict['xyz_gradient_accum']
+            if 't_gradient_accum' in state_dict:
+                self.t_gradient_accum = state_dict['t_gradient_accum']
+            if 'active_sh_degree' in state_dict:
+                self.active_sh_degree = state_dict['active_sh_degree']
+            if 'optimizer' in state_dict:
+                self.optimizer.load_state_dict(state_dict['optimizer'])
+
     def densify_and_prune(self, ts, max_grad, max_grad_t, min_opacity, prune_big_points):
         max_grad = cfg.optim.get('densify_grad_threshold_dynamic', max_grad)
         if cfg.optim.get('densify_grad_abs_dynamic', False):
@@ -241,6 +281,10 @@ class GaussianModelDynamic(GaussianModel):
 
         # Prune points below opacity
         prune_mask = (self.get_opacity(ts) < min_opacity).squeeze()
+        # Prune points with big scale
+        # big_points_ws = self.get_scaling.max(dim=1).values > extent * self.percent_big_ws
+
+        # prune_mask = torch.logical_or(prune_mask, big_points_ws)
         self.prune_points(prune_mask)
         
         # Reset
@@ -255,7 +299,7 @@ class GaussianModelDynamic(GaussianModel):
     
     def prune_points(self, mask):
         valid_points_mask = ~mask
-        prune_list = ['xyz', 'f_dc', 'f_rest', 'opacity', 'scaling', 'rotation', 't', 'scaling_t', 'rotation_r']
+        prune_list = ['xyz', 'f_dc', 'f_rest', 'opacity', 'scaling', 'rotation', 'semantic', 't', 'scaling_t', 'rotation_r']
         optimizable_tensors = self.prune_optimizer(valid_points_mask, prune_list = prune_list)
 
         self._xyz = optimizable_tensors["xyz"]
@@ -264,6 +308,7 @@ class GaussianModelDynamic(GaussianModel):
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
+        self._semantic = optimizable_tensors["semantic"]
 
         # 4dgs
         self._t = optimizable_tensors["t"]
@@ -313,6 +358,7 @@ class GaussianModelDynamic(GaussianModel):
         new_t = new_xyzt[...,3:4]
         new_scaling_t = self.scaling_inverse_activation(self.get_scaling_t[selected_pts_mask].repeat(N, 1) / (0.8 * N))
         new_rotation_r = self._rotation_r[selected_pts_mask].repeat(N, 1)
+        new_semantic = self._semantic[selected_pts_mask].repeat(N, 1)
 
         new_cov_t = self.cov_t[selected_pts_mask].repeat(N, 1)
         self.cov_t = torch.cat([self.cov_t, new_cov_t], dim=0)
@@ -327,6 +373,7 @@ class GaussianModelDynamic(GaussianModel):
             "t" : new_t,
             "scaling_t" : new_scaling_t,
             "rotation_r" :new_rotation_r,
+            "semantic" : new_semantic,
         }
 
         self.densification_postfix(densification_dict)
@@ -356,6 +403,7 @@ class GaussianModelDynamic(GaussianModel):
         new_t = self._t[selected_pts_mask]
         new_scaling_t = self._scaling_t[selected_pts_mask]
         new_rotation_r = self._rotation_r[selected_pts_mask]
+        new_semantic = self._semantic[selected_pts_mask]
 
         new_cov_t = self.cov_t[selected_pts_mask]
         self.cov_t = torch.cat([self.cov_t, new_cov_t], dim=0)
@@ -371,6 +419,7 @@ class GaussianModelDynamic(GaussianModel):
             "cov_t": new_cov_t,
             "scaling_t": new_scaling_t,
             "rotation_r": new_rotation_r,
+            "semantic" : new_semantic,
         }
 
         self.densification_postfix(densification_dict)
@@ -383,6 +432,7 @@ class GaussianModelDynamic(GaussianModel):
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
+        self._semantic = optimizable_tensors["semantic"]
         
         self._t = optimizable_tensors["t"]
         self._scaling_t = optimizable_tensors["scaling_t"]

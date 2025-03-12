@@ -67,10 +67,9 @@ class MixGaussianRenderer():
         override_color = None,
         parse_camera_again: bool = True,
     ):
-        pc.set_visibility(include_list=['background'])
-        if parse_camera_again: pc.parse_camera(viewpoint_camera)
-        result = self.render_kernel(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color, white_background=True)
-
+        include_list=['background', 'sky']
+        exclude_list = list(set(pc.model_name_id.keys()) - set(include_list))
+        result = self.render(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color, exclude_list=exclude_list)
         return result
     
     def render_sky(
@@ -83,9 +82,9 @@ class MixGaussianRenderer():
         override_color = None,
         parse_camera_again: bool = True,
     ):  
-        pc.set_visibility(include_list=['sky'])
-        if parse_camera_again: pc.parse_camera(viewpoint_camera)
-        result = self.render_kernel(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color)
+        include_list=['sky']
+        exclude_list = list(set(pc.model_name_id.keys()) - set(include_list))
+        result = self.render(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color, exclude_list=exclude_list)
         return result
     
     def render(

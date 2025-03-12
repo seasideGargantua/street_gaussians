@@ -114,7 +114,7 @@ class ONCE(object):
 
     def get_frame_ids(self, cam_name):
         frame_list = os.listdir(osp.join(self.data_root, self.seq_id, cam_name))
-        frame_list = [frame_id.strip('.jpg') for frame_id in frame_list]
+        frame_list = sorted([frame_id.strip('.jpg') for frame_id in frame_list])
         return frame_list
 
     def get_l2w(self, frame_id):
@@ -161,6 +161,7 @@ class ONCE(object):
         points_xyz = points[:, :3]
         points_xyz_homo = np.concatenate([points_xyz, np.ones_like(points_xyz[..., :1])], axis=-1)
         points_xyz_cam = (points_xyz_homo @ w2c.T)[:, :3]
+
         points_xyz_pixel = points_xyz_cam[..., :3] @ ixt.T
         points_xyz_pixel = points_xyz_pixel / points_xyz_pixel[..., 2:]
         valid_x = np.logical_and(points_xyz_pixel[..., 0] >= 0, points_xyz_pixel[..., 0] < w)
@@ -170,9 +171,12 @@ class ONCE(object):
         valid_indices = np.where(valid_mask)[0]
     
         # get valid 2d points
-        valid_points_2d = points_xyz_pixel[valid_indices].astype(int)
+        valid_points_2d = points_xyz_pixel[valid_indices].round().astype(np.int32)
+        valid_points_2d[:, 0] = np.clip(valid_points_2d[:, 0], 0, w-1)
+        valid_points_2d[:, 1] = np.clip(valid_points_2d[:, 1], 0, h-1)
         
         # get points rgb
+        rgb = np.array(rgb)
         points_rgb = rgb[valid_points_2d[:, 1], valid_points_2d[:, 0]]
 
         # check if points are in object bound

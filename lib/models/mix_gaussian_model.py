@@ -364,10 +364,12 @@ class MixGaussianModel(nn.Module):
         if self.pose_correction is not None:
             self.pose_correction.update_optimizer()
 
-    def set_max_radii2D(self, radii, visibility_filter):
+    def set_max_radii2D(self, radii, visibility_filter, exclude_list=[]):
         radii = radii.float()
         
         for model_name in self.graph_gaussian_range.keys():
+            if model_name in exclude_list:
+                continue
             model: GaussianModel = getattr(self, model_name)
             start, end = self.graph_gaussian_range[model_name]
             visibility_model = visibility_filter[start:end]
@@ -375,9 +377,11 @@ class MixGaussianModel(nn.Module):
             model.max_radii2D[visibility_model] = torch.max(
                 model.max_radii2D[visibility_model], max_radii2D_model[visibility_model])
         
-    def add_densification_stats(self, viewspace_point_tensor, visibility_filter):
+    def add_densification_stats(self, viewspace_point_tensor, visibility_filter, exclude_list=[]):
         viewspace_point_tensor_grad = viewspace_point_tensor.grad
         for model_name in self.graph_gaussian_range.keys():
+            if model_name in exclude_list:
+                continue
             model: GaussianModel = getattr(self, model_name)
             start, end = self.graph_gaussian_range[model_name]
             visibility_model = visibility_filter[start:end]

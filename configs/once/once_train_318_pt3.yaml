@@ -1,9 +1,11 @@
 task: once_exp
-source_path: ./data/ONCE_Part/3D_images/data/000318
+source_path: ./data/once
 exp_name: once_train_318_pt3
 # exp_name: once_train_92
 
 data:
+  seq_id: '000318'
+  cam_names: ['cam03']
   split_test: -1
   split_train: 1
   type: Once
@@ -39,14 +41,14 @@ eval:
 optim:
   prune_box_interval: 100
   densification_interval: 100
-  densify_from_iter: 500
+  densify_from_iter: 2500
   densify_grad_threshold_bkgd: 0.0006
   densify_grad_abs_bkgd: True
   densify_grad_threshold_dynamic: 0.0002
   densify_grad_abs_dynamic: False
   densify_grad_threshold: 0.0002
   densify_grad_threshold_t: 0.0002
-  densify_until_iter: 8000
+  densify_until_iter: 30000
   feature_lr: 0.0025
   max_screen_size: 20
   min_opacity: 0.005
@@ -71,8 +73,8 @@ optim:
   lambda_sky: 0.05
   lambda_sky_scale: [1, 1, 0]
   lambda_mask: 0.1
-  lambda_reg: 0.01
-  lambda_depth_lidar: 0.01
+  lambda_reg: 0.1
+  lambda_depth_lidar: 0.
   lambda_rmobj: 0.01
 
   track_position_lr_delay_mult: 0.01
@@ -84,6 +86,8 @@ optim:
   track_rotation_lr_init: 0.001
   track_rotation_lr_final: 1.0e-5
   track_rotation_max_steps: 30000
+
+  bkgd_steps: 25000
 
 render:
   fps: 10

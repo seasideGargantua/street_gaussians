@@ -90,17 +90,32 @@ def training():
             obj_bound = viewpoint_cam.guidance['obj_bound']
             obj_bound = obj_bound.cuda(non_blocking=True) if not obj_bound.is_cuda else obj_bound
         
+        loss = 0.
+
+        if iteration < optim_args.bkgd_steps:
+            render_pkg_bkgd = gaussians_renderer.render_background(viewpoint_cam, gaussians)
+            image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg_bkgd["rgb"], render_pkg_bkgd['acc'], render_pkg_bkgd["viewspace_points"], render_pkg_bkgd["visibility_filter"], render_pkg_bkgd["radii"]
+            depth = render_pkg_bkgd['depth'] # [1, H, W]
+            mask = ~obj_bound
+        else:
+            render_pkg = gaussians_renderer.render(viewpoint_cam, gaussians)
+            image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg["rgb"], render_pkg['acc'], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+            depth = render_pkg['depth'] # [1, H, W]
+
+            render_pk_dynamic = gaussians_renderer.render_dynamic(viewpoint_cam, gaussians)
+            image_dynamic, acc_dynamic, _, _, _ = render_pkg_dynamic["rgb"], render_pkg_dynamic['acc'], render_pkg_dynamic["viewspace_points"], render_pkg_dynamic["visibility_filter"], render_pkg_dynamic["radii"]
             
-        render_pkg = gaussians_renderer.render(viewpoint_cam, gaussians)
-        image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg["rgb"], render_pkg['acc'], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        depth = render_pkg['depth'] # [1, H, W]
+            # rgb loss
+            Ll1_dynamic = l1_loss(image_dynamic, gt_image, obj_bound)
+            scalar_dict['l1_loss'] = Ll1.item()
+            loss += (1.0 - optim_args.lambda_dssim) * optim_args.lambda_l1 * Ll1 + optim_args.lambda_dssim * (1.0 - ssim(image_dynamic, gt_image, mask=obj_bound))
 
         scalar_dict = dict()
         
         # rgb loss
         Ll1 = l1_loss(image, gt_image, mask)
         scalar_dict['l1_loss'] = Ll1.item()
-        loss = (1.0 - optim_args.lambda_dssim) * optim_args.lambda_l1 * Ll1 + optim_args.lambda_dssim * (1.0 - ssim(image, gt_image, mask=mask))
+        loss += (1.0 - optim_args.lambda_dssim) * optim_args.lambda_l1 * Ll1 + optim_args.lambda_dssim * (1.0 - ssim(image, gt_image, mask=mask))
     
         # sky loss
         if optim_args.lambda_sky > 0 and gaussians.include_sky and sky_mask is not None:
@@ -163,7 +178,11 @@ def training():
             save_img_torch(image_to_show, f"{cfg.model_path}/log_images/{iteration}.jpg")
         
         with torch.no_grad():
-            
+            if iteration < optim_args.bkgd_steps:
+                exclude_list = ['dynamic', 'sky']
+            else:
+                exclude_list = ['sky']
+
             # Log
             tensor_dict = dict()
 
@@ -173,7 +192,8 @@ def training():
                 ema_psnr_for_log = 0.4 * psnr(image, gt_image, mask).mean().float() + 0.6 * ema_psnr_for_log
                 progress_bar.set_postfix({"Exp": f"{cfg.task}-{cfg.exp_name}", 
                                           "Loss": f"{ema_loss_for_log:.{7}f},", 
-                                          "PSNR": f"{ema_psnr_for_log:.{4}f}"})
+                                          "PSNR": f"{ema_psnr_for_log:.{4}f}",
+                                          "nums": f"{gaussians.get_xyz.shape[0]}"})
             progress_bar.update(1)
             # if iteration == training_args.iterations:
             #     progress_bar.close()
@@ -185,12 +205,12 @@ def training():
 
             # Densification
             if iteration < optim_args.densify_until_iter:
-                gaussians.set_visibility(include_list=list(set(gaussians.model_name_id.keys()) - set(['sky'])))
-                gaussians.set_max_radii2D(radii, visibility_filter)
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                gaussians.set_visibility(include_list=list(set(gaussians.model_name_id.keys()) - set(exclude_list)))
+                gaussians.set_max_radii2D(radii, visibility_filter, exclude_list=exclude_list)
+                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter, exclude_list=exclude_list)
                 
                 prune_big_points = iteration > optim_args.opacity_reset_interval
-
+                prune_big_points = False
                 if iteration > optim_args.densify_from_iter:
                     if iteration % optim_args.densification_interval == 0:
                         scalars, tensors = gaussians.densify_and_prune(
@@ -199,19 +219,20 @@ def training():
                             max_grad_t=optim_args.densify_grad_threshold_t,
                             min_opacity=optim_args.min_opacity,
                             prune_big_points=prune_big_points,
+                            exclude_list=exclude_list,
                         )
 
                         scalar_dict.update(scalars)
                         tensor_dict.update(tensors)
                         
             # Reset opacity
-            # if iteration < optim_args.densify_until_iter:
-            #     if iteration % optim_args.opacity_reset_interval == 0:
-            #         gaussians.reset_opacity(exclude_list=['dynamic'])
-            #     if data_args.white_background and iteration == optim_args.densify_from_iter:
-            #         gaussians.reset_opacity(exclude_list=['dynamic'])
+            if iteration < optim_args.densify_until_iter:
+                if iteration % optim_args.opacity_reset_interval == 0:
+                    gaussians.reset_opacity(exclude_list=exclude_list)
+                if data_args.white_background and iteration == optim_args.densify_from_iter:
+                    gaussians.reset_opacity(exclude_list=exclude_list)
 
-            training_report(tb_writer, iteration, scalar_dict, tensor_dict, training_args.test_iterations, scene, gaussians_renderer)
+            # training_report(tb_writer, iteration, scalar_dict, tensor_dict, training_args.test_iterations, scene, gaussians_renderer)
 
             # Optimizer step
             if iteration < training_args.iterations:

@@ -62,7 +62,7 @@ def generate_dataparser_outputs(datadir):
     )
     
     depth_dir = os.path.join(cfg.model_path, 'lidar_depth')
-    build_lidar_depth = not os.path.exists(depth_dir) or cfg.data.get('build_lidar_depth', False)
+    build_lidar_depth = (not os.path.exists(depth_dir) or cfg.data.get('build_lidar_depth', False)) or (len(os.listdir(depth_dir)) == 0)
     if build_lidar_depth:
         os.makedirs(depth_dir, exist_ok=True)
 
@@ -94,7 +94,7 @@ def generate_dataparser_outputs(datadir):
             w2c = np.linalg.inv(c2w)
             R = np.transpose(w2c[:3,:3])
             T = np.array(w2c[:3,3])
-            
+
             cams.append(cam_id)
             image_filenames.append(image_path)
             frames_idx.append(idx)
@@ -202,14 +202,18 @@ def generate_dataparser_outputs(datadir):
                 points_xyz = np.concatenate(v, axis=0)
                 points_rgb = np.concatenate(points_rgb_dict[k], axis=0)
                 if k == 'bkgd':
-                    # downsample lidar pointcloud with voxels
-                    points_lidar = o3d.geometry.PointCloud()
-                    points_lidar.points = o3d.utility.Vector3dVector(points_xyz)
-                    points_lidar.colors = o3d.utility.Vector3dVector(points_rgb)
-                    downsample_points_lidar = points_lidar.voxel_down_sample(voxel_size=0.15)
-                    downsample_points_lidar, _ = downsample_points_lidar.remove_radius_outlier(nb_points=10, radius=0.5)
-                    points_lidar_xyz = np.asarray(downsample_points_lidar.points).astype(np.float32)
-                    points_lidar_rgb = np.asarray(downsample_points_lidar.colors).astype(np.float32)                              
+                    if cfg.data.get("downsample", False):
+                        # downsample lidar pointcloud with voxels
+                        points_lidar = o3d.geometry.PointCloud()
+                        points_lidar.points = o3d.utility.Vector3dVector(points_xyz)
+                        points_lidar.colors = o3d.utility.Vector3dVector(points_rgb)
+                        downsample_points_lidar = points_lidar.voxel_down_sample(voxel_size=0.15)
+                        downsample_points_lidar, _ = downsample_points_lidar.remove_radius_outlier(nb_points=10, radius=0.5)
+                        points_lidar_xyz = np.asarray(downsample_points_lidar.points).astype(np.float32)
+                        points_lidar_rgb = np.asarray(downsample_points_lidar.colors).astype(np.float32)
+                    else:
+                        points_lidar_xyz = points_xyz
+                        points_lidar_rgb = points_rgb
                 elif k == 'dynamic':
                     points_time = np.concatenate(points_time_dict[k], axis=0)
                     if len(points_xyz) > initial_num_dynamic:

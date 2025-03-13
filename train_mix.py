@@ -98,9 +98,10 @@ def training():
             depth = render_pkg_bkgd['depth'] # [1, H, W]
             mask = ~obj_bound
         else:
-            render_pkg = gaussians_renderer.render(viewpoint_cam, gaussians)
+            render_pkg = gaussians_renderer.render_background(viewpoint_cam, gaussians)
             image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg["rgb"], render_pkg['acc'], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
             depth = render_pkg['depth'] # [1, H, W]
+            mask = ~obj_bound
 
             render_pk_dynamic = gaussians_renderer.render_dynamic(viewpoint_cam, gaussians)
             image_dynamic, acc_dynamic, _, _, _ = render_pkg_dynamic["rgb"], render_pkg_dynamic['acc'], render_pkg_dynamic["viewspace_points"], render_pkg_dynamic["visibility_filter"], render_pkg_dynamic["radii"]
@@ -153,16 +154,16 @@ def training():
             loss += optim_args.lambda_color_correction * color_correction_reg_loss
                     
         scalar_dict['loss'] = loss.item()
-        
+
         loss.backward()
-        
+
         iter_end.record()
                 
         is_save_images = True
         if is_save_images and (iteration % 1000 == 0):
             # row0: gt_image, image, depth
             # row1: acc, image_obj, acc_obj
-            depth_colored, _ = visualize_depth_numpy(depth.detach().cpu().numpy().squeeze(0))
+            depth_colored, _ = visualize_depth_numpy(depth.detach().cpu().numpy())
             depth_colored = depth_colored[..., [2, 1, 0]] / 255.
             depth_colored = torch.from_numpy(depth_colored).permute(2, 0, 1).float().cuda()
             row0 = torch.cat([gt_image, image, depth_colored], dim=2)

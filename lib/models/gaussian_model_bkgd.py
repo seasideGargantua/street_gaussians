@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import os
 from mixplat.projection import compute_3d_gaussians_covariance
-from mixplat.sh import spherical_harmonics_3d_fast
+from mixplat.sh import spherical_harmonics_3d
 from lib.config import cfg
 from lib.utils.graphics_utils import BasicPointCloud
 from lib.datasets.base_readers import fetchPly
@@ -83,7 +83,7 @@ class GaussianModelBkgd(GaussianModel):
             n = self.active_sh_degree
             viewdirs = self.get_xyz.detach() - translation  # (N, 1, 3)
             viewdirs = viewdirs / viewdirs.norm(dim=-1, keepdim=True)
-            rgbs = spherical_harmonics_3d_fast(n, viewdirs, self.get_features)
+            rgbs = spherical_harmonics_3d(n, self.get_features, viewdirs)
         else:
             rgbs = torch.sigmoid(self.get_features[:,0,:])
         return rgbs

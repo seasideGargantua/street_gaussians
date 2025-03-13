@@ -378,7 +378,7 @@ class MixGaussianModel(nn.Module):
                 model.max_radii2D[visibility_model], max_radii2D_model[visibility_model])
         
     def add_densification_stats(self, viewspace_point_tensor, visibility_filter, exclude_list=[]):
-        viewspace_point_tensor_grad = viewspace_point_tensor.grad
+        viewspace_point_tensor_grad = viewspace_point_tensor.grad.squeeze()
         for model_name in self.graph_gaussian_range.keys():
             if model_name in exclude_list:
                 continue

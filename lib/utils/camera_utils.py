@@ -244,4 +244,4 @@ def camera_cv2gl(R, T):
     viewmat = torch.eye(4, device=R.device, dtype=R.dtype)
     viewmat[:3, :3] = R_inv
     viewmat[:3, 3:4] = T_inv
-    return viewmat, T.T
+    return viewmat.unsqueeze(0), T.T

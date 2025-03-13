@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 import os
 from mixplat.projection import compute_4d_gaussians_covariance
-from mixplat.sh import spherical_harmonics_3d_fast
+from mixplat.sh import spherical_harmonics_3d
 from lib.config import cfg
 from lib.models.gaussian_model import GaussianModel
 from lib.utils.general_utils import quaternion_to_matrix, inverse_sigmoid, matrix_to_quaternion, get_expon_lr_func, quaternion_raw_multiply, build_rotation_4d, build_scaling_rotation_4d
@@ -100,7 +100,7 @@ class GaussianModelDynamic(GaussianModel):
             n = self.active_sh_degree
             viewdirs = self.get_xyz.detach() - translation  # (N, 1, 3)
             viewdirs = viewdirs / viewdirs.norm(dim=-1, keepdim=True)
-            rgbs = spherical_harmonics_3d_fast(n, viewdirs, self.get_features)
+            rgbs = spherical_harmonics_3d(n, self.get_features, viewdirs)
         else:
             rgbs = torch.sigmoid(self.get_features[:,0,:])
         return rgbs

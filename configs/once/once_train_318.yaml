@@ -1,17 +1,17 @@
 task: once_exp
 source_path: ./data/once
-exp_name: once_train_121_pt0
+exp_name: once_train_318
 # exp_name: once_train_92
-gpus: [3]
 
 data:
-  seq_id: '000121'
+  seq_id: '000318'
   cam_names: ['cam03']
   split_test: -1
   split_train: 1
   type: Once
   white_background: false
-  selected_frames: [250, 300]
+  selected_frames: [629, 779]
+  # selected_frames: [0, 50]
   cameras: [3]
   extent: 10
   use_colmap: true
@@ -41,15 +41,15 @@ eval:
 optim:
   prune_box_interval: 100
   densification_interval: 100
-  densification_interval_dynamic : 100
+  densification_interval_dynamic : 300
   densify_from_iter: 500
   densify_grad_threshold_bkgd: 0.0006
   densify_grad_abs_bkgd: True
   densify_grad_threshold_dynamic: 0.0002
   densify_grad_abs_dynamic: False
-  densify_grad_threshold: 0.0002
-  densify_grad_threshold_t: 0.000002
-  densify_until_iter: 8000
+  densify_grad_threshold: 0.00002
+  densify_grad_threshold_t: 0.0000002
+  densify_until_iter: 15000
   feature_lr: 0.0025
   max_screen_size: 20
   min_opacity: 0.005
@@ -75,7 +75,7 @@ optim:
   lambda_sky_scale: [1, 1, 0]
   lambda_mask: 0.1
   lambda_reg: 0.1
-  lambda_depth_lidar: 0.1
+  lambda_depth_lidar: 0.
   lambda_rmobj: 0.01
   lambda_reg_bkgd: 0.1
 
@@ -89,7 +89,7 @@ optim:
   track_rotation_lr_final: 1.0e-5
   track_rotation_max_steps: 30000
 
-  bkgd_steps: 2000
+  bkgd_steps: 500
 
 render:
   fps: 10

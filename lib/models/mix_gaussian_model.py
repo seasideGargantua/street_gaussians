@@ -220,13 +220,12 @@ class MixGaussianModel(nn.Module):
         
         # dynamic
         if self.get_visibility('dynamic'):
-            num_gaussians_dynamic = self.dynamic.get_xyz.shape[0]
+            num_gaussians_dynamic = self.dynamic._xyz.shape[0]
             self.num_gaussians += num_gaussians_dynamic
             self.graph_gaussian_range['dynamic'] = [idx, idx + num_gaussians_dynamic]
             idx += num_gaussians_dynamic
     
-    @property
-    def get_xyz(self):
+    def get_xyz(self, ts=None):
         xyzs = []
         if self.get_visibility('background'):
             xyz_bkgd = self.background.get_xyz
@@ -236,7 +235,7 @@ class MixGaussianModel(nn.Module):
             xyzs.append(xyz_bkgd)
         
         if self.get_visibility('dynamic'):
-            xyz_dynamic = self.dynamic.get_xyz
+            xyz_dynamic = self.dynamic.get_xyz(ts)
             if self.use_pose_correction:
                 xyz_dynamic = self.pose_correction.correct_gaussian_xyz(self.viewpoint_camera, xyz_dynamic)
             
@@ -258,7 +257,7 @@ class MixGaussianModel(nn.Module):
 
         colors = torch.cat(colors, dim=0)
         return colors
-                    
+                   
     def get_opacity(self, ts):
         opacities = []
         
@@ -267,8 +266,8 @@ class MixGaussianModel(nn.Module):
             opacities.append(opacity_bkgd)
 
         if self.get_visibility('dynamic'):
-            # opacity_dynamic = self.dynamic.get_opacity(ts)
-            opacity_dynamic = self.dynamic.get_opacity()
+            opacity_dynamic = self.dynamic.get_opacity(ts)
+            # opacity_dynamic = self.dynamic.get_opacity()
             opacities.append(opacity_dynamic)
         
         opacities = torch.cat(opacities, dim=0)
@@ -288,11 +287,22 @@ class MixGaussianModel(nn.Module):
         cov3ds = torch.cat(cov3ds, dim=0)
         return cov3ds
     
+    @property
+    def get_gaussians_num(self):
+        num = 0
+        if self.get_visibility('background'):
+            num += self.background._xyz.shape[0]
+
+        if self.get_visibility('dynamic'):
+            num += self.dynamic._xyz.shape[0]
+
+        return num
+
     def process_render(self, ts, camera_center):
         cov3ds = self.get_cov3ds
-        xyzs = self.get_xyz
-        rgbs = self.get_colors(camera_center)
         opacity = self.get_opacity(ts)
+        xyzs = self.get_xyz(ts)
+        rgbs = self.get_colors(camera_center)
         return cov3ds, xyzs, rgbs, opacity
 
     def get_normals(self, camera: Camera):

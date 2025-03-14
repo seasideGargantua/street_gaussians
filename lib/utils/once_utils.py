@@ -74,11 +74,12 @@ def generate_dataparser_outputs(datadir):
         os.makedirs(ply_dir, exist_ok=True)
 
     W,H = once_loader.get_WH()
-    poss = []
-    for idx, frame_id in tqdm(enumerate(frame_list)):
-        pos = once_loader.get_l2w(frame_id)[:3, 3]
-        poss.append(pos)
-    offset = np.array(poss).mean()
+    # poss = []
+    # for idx, frame_id in tqdm(enumerate(frame_list)):
+    #     pos = once_loader.get_l2w(frame_id)[:3, 3]
+    #     poss.append(pos)
+    # offset = np.array(poss).mean()
+    offset = None
     for idx, frame_id in tqdm(enumerate(frame_list), desc="Loading data"):
         timestamp = idx / num_frames
         if build_pointcloud:
@@ -114,7 +115,7 @@ def generate_dataparser_outputs(datadir):
 
             if build_pointcloud:
                 points_xyz_homo = np.concatenate([points_xyz, np.ones_like(points_xyz[..., :1])], axis=-1)
-                points_xyz_world = (points_xyz_homo @ l2w.T)[:, :3] - offset
+                points_xyz_world = (points_xyz_homo @ l2w.T)[:, :3]
                 points_dict = once_loader.split_point_cloud(points_xyz_world, points_time, image, obj_bound, w2c, ixt, W, H)
                 points_list.append(points_dict)
 

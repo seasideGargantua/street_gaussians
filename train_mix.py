@@ -94,6 +94,7 @@ def training():
 
         if iteration < optim_args.bkgd_steps:
             render_pkg_bkgd = gaussians_renderer.render_background(viewpoint_cam, gaussians)
+            # __import__('ipdb').set_trace()
             image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg_bkgd["rgb"], render_pkg_bkgd['acc'], render_pkg_bkgd["viewspace_points"], render_pkg_bkgd["visibility_filter"], render_pkg_bkgd["radii"]
             depth = render_pkg_bkgd['depth'] # [1, H, W]
             mask = ~obj_bound
@@ -118,7 +119,7 @@ def training():
             scalar_dict['sky_loss'] = sky_loss.item()
             loss += optim_args.lambda_sky * sky_loss
         
-        if optim_args.lambda_reg > 0 and gaussians.include_dynamic and iteration >= optim_args.densify_until_iter:
+        if optim_args.lambda_reg > 0 and gaussians.include_dynamic and iteration > optim_args.bkgd_steps:
             render_pkg_dynamic = gaussians_renderer.render_dynamic(viewpoint_cam, gaussians, parse_camera_again=False)
             image_dynamic, acc_dynamic = render_pkg_dynamic["rgb"], render_pkg_dynamic['acc']
             acc_dynamic = torch.clamp(acc_dynamic, min=1e-6, max=1.-1e-6)
@@ -141,8 +142,8 @@ def training():
         # lidar depth loss
         if optim_args.lambda_depth_lidar > 0 and lidar_depth is not None:       
             depth_mask = torch.logical_and((lidar_depth > 0.), mask)
-            # expected_depth = depth / (render_pkg['acc'] + 1e-10)
-            depth_error = torch.abs((depth[depth_mask] - 1. / lidar_depth[depth_mask]))
+            expected_depth = depth / (acc + 1e-10)
+            depth_error = torch.abs((expected_depth[depth_mask] - lidar_depth[depth_mask]))
             depth_error, _ = torch.topk(depth_error, int(0.95 * depth_error.size(0)), largest=False)
             lidar_depth_loss = depth_error.mean()
             scalar_dict['lidar_depth_loss'] = lidar_depth_loss
@@ -195,8 +196,8 @@ def training():
                 progress_bar.set_postfix({"Exp": f"{cfg.task}-{cfg.exp_name}", 
                                           "Loss": f"{ema_loss_for_log:.{7}f},", 
                                           "PSNR": f"{ema_psnr_for_log:.{4}f}",
-                                          "nums": f"{gaussians.get_xyz.shape[0]}",
-                                          "dy_nums": f"{gaussians.dynamic.get_xyz.shape[0]}"})
+                                          "nums": f"{gaussians.get_gaussians_num}",
+                                          "dy_nums": f"{gaussians.dynamic._xyz.shape[0]}"})
             progress_bar.update(1)
             # if iteration == training_args.iterations:
             #     progress_bar.close()
@@ -213,7 +214,7 @@ def training():
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter, exclude_list=exclude_list)
                 
                 prune_big_points = iteration > optim_args.opacity_reset_interval
-                prune_big_points = False
+                # prune_big_points = False
                 if iteration > optim_args.densify_from_iter:
                     if iteration % optim_args.densification_interval == 0:
                         if iteration % optim_args.densification_interval_dynamic == 0:
@@ -340,7 +341,7 @@ def training_report(tb_writer, iteration, scalar_stats, tensor_stats, testing_it
 
         if tb_writer:
             tb_writer.add_histogram("test/opacity_histogram", scene.gaussians.get_opacity, iteration)
-            tb_writer.add_scalar('test/points_total', scene.gaussians.get_xyz.shape[0], iteration)
+            tb_writer.add_scalar('test/points_total', scene.gaussians.get_gaussians_num, iteration)
         torch.cuda.empty_cache()
 
 if __name__ == "__main__":

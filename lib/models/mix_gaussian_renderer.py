@@ -134,11 +134,9 @@ class MixGaussianRenderer():
         override_color = None,
         white_background = cfg.data.white_background,
     ):
-        try:
-            means3D = pc.get_xyz
-            num_gaussians = len(means3D)
-        except:
-            num_gaussians = 0
+        timestamp = viewpoint_camera.meta['timestamp']
+        
+        num_gaussians = pc.get_gaussians_num
         
         if num_gaussians == 0:
             if white_background:
@@ -161,7 +159,6 @@ class MixGaussianRenderer():
         Ks = viewpoint_camera.K.unsqueeze(0)
         C = viewmats.size(0)
 
-        timestamp = viewpoint_camera.meta['timestamp']
         cov3ds, xyzs, rgbs, opacities = pc.process_render(timestamp, T)
         # opacities = opacities.transpose(0,1)
         rgbs = rgbs.unsqueeze(0)
@@ -266,11 +263,8 @@ class MixGaussianRenderer():
         override_color = None,
         white_background = cfg.data.white_background,
     ):
-        try:
-            means3D = pc.get_xyz
-            num_gaussians = len(means3D)
-        except:
-            num_gaussians = 0
+
+        num_gaussians = pc.get_gaussians_num
         
         if num_gaussians == 0:
             if white_background:
@@ -293,7 +287,7 @@ class MixGaussianRenderer():
         scaling_modifier = scaling_modifier or self.cfg.scaling_modifier
         rasterizer = make_rasterizer(viewpoint_camera, pc.max_sh_degree, bg_color, scaling_modifier)
         timestamp = viewpoint_camera.meta['timestamp']
-        cov3ds = pc.get_cov3ds
+        cov3ds, means3D, rgbs, opacity = pc.process_render(timestamp, viewpoint_camera.camera_center)
 
         convert_SHs_python = convert_SHs_python or self.cfg.convert_SHs_python
         compute_cov3D_python = compute_cov3D_python or self.cfg.compute_cov3D_python
@@ -310,38 +304,17 @@ class MixGaussianRenderer():
             screenspace_points = None 
 
         means2D = screenspace_points
-        opacity = pc.get_opacity(timestamp)
 
         # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
         # scaling / rotation by the rasterizer.
         scales = None
         rotations = None
         cov3D_precomp = cov3ds
-        # if compute_cov3D_python:
-        #     cov3D_precomp = pc.get_covariance(scaling_modifier)
-        # else:
-        #     scales = pc.get_scaling
-        #     rotations = pc.get_rotation
 
         # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
         # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
         shs = None
-        colors_precomp = None
-        # override_color = rgbs
-        if override_color is None:
-            if convert_SHs_python:
-                shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
-                dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
-                dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
-                sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
-                colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
-            else:
-                try:
-                    shs = pc.get_features
-                except:
-                    colors_precomp = pc.get_colors(viewpoint_camera.camera_center)
-        else:
-            colors_precomp = override_color
+        colors_precomp = rgbs
 
         # TODO: add more feature here
         feature_names = []

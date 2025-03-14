@@ -19,7 +19,7 @@ class GaussianModelDynamic(GaussianModel):
         frame_nums,
         time_duration_start=0.0,
         time_duration_end=1.0,
-        init_scale_f=15,
+        init_scale_f=2,
         perframe_sparse_scale_t_mult=1.0,
     ):  
         self.frame_nums = frame_nums
@@ -61,13 +61,14 @@ class GaussianModelDynamic(GaussianModel):
         self.delta_xyz = self.speed * dt
         return self.delta_xyz
 
-    @property
-    def get_xyz(self):
-        if hasattr(self, 'delta_xyz'):
-            xyz = self._xyz + self.delta_xyz
+    def get_xyz(self, ts=None):
+        if ts is not None:
+            dt = ts - self._t
+            delta_xyz = self.speed * dt
+            self.xyz = self._xyz + delta_xyz
         else:
-            xyz = self._xyz
-        return xyz
+            self.xyz = self._xyz
+        return self.xyz
 
     @property
     def get_scaling_xyzt(self):
@@ -98,7 +99,7 @@ class GaussianModelDynamic(GaussianModel):
     def get_rgbs(self, translation):
         if self.active_sh_degree > 0:
             n = self.active_sh_degree
-            viewdirs = self.get_xyz.detach() - translation  # (N, 1, 3)
+            viewdirs = self.xyz.detach() - translation  # (N, 1, 3)
             viewdirs = viewdirs / viewdirs.norm(dim=-1, keepdim=True)
             rgbs = spherical_harmonics_3d(n, self.get_features, viewdirs)
         else:
@@ -161,15 +162,15 @@ class GaussianModelDynamic(GaussianModel):
 
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self._semantic = nn.Parameter(semantics.requires_grad_(True))
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        self.max_radii2D = torch.zeros((self._xyz.shape[0]), device="cuda")
 
 
     def training_setup(self):
         args = cfg.optim
 
-        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 2), device="cuda")
+        self.xyz_gradient_accum = torch.zeros((self._xyz.shape[0], 2), device="cuda")
         self.t_gradient_accum = torch.zeros((self._xyz.shape[0], 1), device="cuda")
-        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self._xyz.shape[0], 1), device="cuda")
         self.active_sh_degree = 0
                 
         tag = 'dynamic'
@@ -288,10 +289,10 @@ class GaussianModelDynamic(GaussianModel):
         self.prune_points(prune_mask)
         
         # Reset
-        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 2), device="cuda")
-        self.t_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        self.xyz_gradient_accum = torch.zeros((self._xyz.shape[0], 2), device="cuda")
+        self.t_gradient_accum = torch.zeros((self._xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self._xyz.shape[0], 1), device="cuda")
+        self.max_radii2D = torch.zeros((self._xyz.shape[0]), device="cuda")
 
         torch.cuda.empty_cache()
         
@@ -315,6 +316,8 @@ class GaussianModelDynamic(GaussianModel):
         self._scaling_t = optimizable_tensors["scaling_t"]
         self._rotation_r = optimizable_tensors["rotation_r"]
         self.cov_t = self.cov_t[valid_points_mask]
+        if hasattr(self, 'delta_xyz'):
+            self.delta_xyz = self.delta_xyz[valid_points_mask]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
@@ -322,7 +325,7 @@ class GaussianModelDynamic(GaussianModel):
         self.t_gradient_accum = self.t_gradient_accum[valid_points_mask]
 
     def densify_and_split(self, grads, grads_t, grad_threshold, grad_threshold_t, scene_extent, N=2):
-        n_init_points = self.get_xyz.shape[0]
+        n_init_points = self._xyz.shape[0]
                 
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
@@ -362,6 +365,10 @@ class GaussianModelDynamic(GaussianModel):
 
         new_cov_t = self.cov_t[selected_pts_mask].repeat(N, 1)
         self.cov_t = torch.cat([self.cov_t, new_cov_t], dim=0)
+        if hasattr(self, 'delta_xyz'):
+            new_delta_xyz = self.delta_xyz[selected_pts_mask].repeat(N, 1)
+            self.delta_xyz = torch.cat([self.delta_xyz, new_delta_xyz], dim=0)
+        
 
         densification_dict = {
             "xyz": new_xyz, 
@@ -407,6 +414,9 @@ class GaussianModelDynamic(GaussianModel):
 
         new_cov_t = self.cov_t[selected_pts_mask]
         self.cov_t = torch.cat([self.cov_t, new_cov_t], dim=0)
+        if hasattr(self, 'delta_xyz'):
+            new_delta_xyz = self.delta_xyz[selected_pts_mask]
+            self.delta_xyz = torch.cat([self.delta_xyz, new_delta_xyz], dim=0)
 
         densification_dict = {
             "xyz": new_xyz, 
@@ -439,7 +449,7 @@ class GaussianModelDynamic(GaussianModel):
         self._rotation_r = optimizable_tensors["rotation_r"]
 
         if reset_params:
-            cat_points_num = self.get_xyz.shape[0] - self.xyz_gradient_accum.shape[0]
+            cat_points_num = self._xyz.shape[0] - self.xyz_gradient_accum.shape[0]
             self.xyz_gradient_accum = torch.cat([self.xyz_gradient_accum, torch.zeros(cat_points_num, 2).cuda()], dim=0)
             self.t_gradient_accum = torch.cat([self.t_gradient_accum, torch.zeros(cat_points_num, 1).cuda()], dim=0)
             self.denom = torch.cat([self.denom, torch.zeros(cat_points_num, 1).cuda()], dim=0)

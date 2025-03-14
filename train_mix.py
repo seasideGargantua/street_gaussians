@@ -98,18 +98,9 @@ def training():
             depth = render_pkg_bkgd['depth'] # [1, H, W]
             mask = ~obj_bound
         else:
-            render_pkg = gaussians_renderer.render_background(viewpoint_cam, gaussians)
-            image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg["rgb"], render_pkg['acc'], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-            depth = render_pkg['depth'] # [1, H, W]
-            mask = ~obj_bound
-
-            render_pk_dynamic = gaussians_renderer.render_dynamic(viewpoint_cam, gaussians)
-            image_dynamic, acc_dynamic, _, _, _ = render_pkg_dynamic["rgb"], render_pkg_dynamic['acc'], render_pkg_dynamic["viewspace_points"], render_pkg_dynamic["visibility_filter"], render_pkg_dynamic["radii"]
-            
-            # rgb loss
-            Ll1_dynamic = l1_loss(image_dynamic, gt_image, obj_bound)
-            scalar_dict['l1_loss'] = Ll1.item()
-            loss += (1.0 - optim_args.lambda_dssim) * optim_args.lambda_l1 * Ll1 + optim_args.lambda_dssim * (1.0 - ssim(image_dynamic, gt_image, mask=obj_bound))
+            render = gaussians_renderer.render(viewpoint_cam, gaussians)
+            image, acc, viewspace_point_tensor, visibility_filter, radii = render["rgb"], render['acc'], render["viewspace_points"], render["visibility_filter"], render["radii"]
+            depth = render['depth'] # [1, H, W]
 
         scalar_dict = dict()
         
@@ -137,6 +128,16 @@ def training():
             scalar_dict['dynamic_acc_loss'] = dynamic_acc_loss.item()
             loss += optim_args.lambda_reg * dynamic_acc_loss
 
+        if optim_args.lambda_reg_bkgd > 0 and iteration > optim_args.bkgd_steps:
+            render_pkg_bkgd = gaussians_renderer.render_background(viewpoint_cam, gaussians, parse_camera_again=False)
+            image_bkgd, acc_bkgd = render_pkg_bkgd["rgb"], render_pkg_bkgd['acc']
+            acc_bkgd = torch.clamp(acc_bkgd, min=1e-6, max=1.-1e-6)
+            bkgd_acc_loss = torch.where(~obj_bound, 
+                -(acc_bkgd * torch.log(acc_bkgd) +  (1. - acc_bkgd) * torch.log(1. - acc_bkgd)), 
+                -torch.log(1. - acc_bkgd)).mean()
+            scalar_dict['bkgd_acc_loss'] = bkgd_acc_loss.item()
+            loss += optim_args.lambda_reg_bkgd * bkgd_acc_loss
+
         # lidar depth loss
         if optim_args.lambda_depth_lidar > 0 and lidar_depth is not None:       
             depth_mask = torch.logical_and((lidar_depth > 0.), mask)
@@ -163,7 +164,7 @@ def training():
         if is_save_images and (iteration % 1000 == 0):
             # row0: gt_image, image, depth
             # row1: acc, image_obj, acc_obj
-            depth_colored, _ = visualize_depth_numpy(depth.detach().cpu().numpy())
+            depth_colored, _ = visualize_depth_numpy(depth.detach().cpu().numpy().squeeze(0))
             depth_colored = depth_colored[..., [2, 1, 0]] / 255.
             depth_colored = torch.from_numpy(depth_colored).permute(2, 0, 1).float().cuda()
             row0 = torch.cat([gt_image, image, depth_colored], dim=2)
@@ -194,7 +195,8 @@ def training():
                 progress_bar.set_postfix({"Exp": f"{cfg.task}-{cfg.exp_name}", 
                                           "Loss": f"{ema_loss_for_log:.{7}f},", 
                                           "PSNR": f"{ema_psnr_for_log:.{4}f}",
-                                          "nums": f"{gaussians.get_xyz.shape[0]}"})
+                                          "nums": f"{gaussians.get_xyz.shape[0]}",
+                                          "dy_nums": f"{gaussians.dynamic.get_xyz.shape[0]}"})
             progress_bar.update(1)
             # if iteration == training_args.iterations:
             #     progress_bar.close()
@@ -214,14 +216,24 @@ def training():
                 prune_big_points = False
                 if iteration > optim_args.densify_from_iter:
                     if iteration % optim_args.densification_interval == 0:
-                        scalars, tensors = gaussians.densify_and_prune(
-                            ts=viewpoint_cam.meta['timestamp'],
-                            max_grad=optim_args.densify_grad_threshold,
-                            max_grad_t=optim_args.densify_grad_threshold_t,
-                            min_opacity=optim_args.min_opacity,
-                            prune_big_points=prune_big_points,
-                            exclude_list=exclude_list,
-                        )
+                        if iteration % optim_args.densification_interval_dynamic == 0:
+                            scalars, tensors = gaussians.densify_and_prune(
+                                ts=viewpoint_cam.meta['timestamp'],
+                                max_grad=optim_args.densify_grad_threshold,
+                                max_grad_t=optim_args.densify_grad_threshold_t,
+                                min_opacity=optim_args.min_opacity,
+                                prune_big_points=prune_big_points,
+                                exclude_list=exclude_list,
+                            )
+                        else:
+                            scalars, tensors = gaussians.densify_and_prune(
+                                ts=viewpoint_cam.meta['timestamp'],
+                                max_grad=optim_args.densify_grad_threshold,
+                                max_grad_t=optim_args.densify_grad_threshold_t,
+                                min_opacity=optim_args.min_opacity,
+                                prune_big_points=prune_big_points,
+                                exclude_list=['sky', 'dynamic'],
+                            )
 
                         scalar_dict.update(scalars)
                         tensor_dict.update(tensors)
@@ -229,9 +241,9 @@ def training():
             # Reset opacity
             if iteration < optim_args.densify_until_iter:
                 if iteration % optim_args.opacity_reset_interval == 0:
-                    gaussians.reset_opacity(exclude_list=exclude_list)
+                    gaussians.reset_opacity(exclude_list=[])
                 if data_args.white_background and iteration == optim_args.densify_from_iter:
-                    gaussians.reset_opacity(exclude_list=exclude_list)
+                    gaussians.reset_opacity(exclude_list=[])
 
             # training_report(tb_writer, iteration, scalar_dict, tensor_dict, training_args.test_iterations, scene, gaussians_renderer)
 

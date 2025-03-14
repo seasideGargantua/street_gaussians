@@ -280,7 +280,7 @@ class GaussianModelDynamic(GaussianModel):
         self.densify_and_split(grads, grads_t, max_grad, max_grad_t, extent)
 
         # Prune points below opacity
-        prune_mask = (self.get_opacity(ts) < min_opacity).squeeze()
+        prune_mask = (self.get_opacity() < min_opacity).squeeze()
         # Prune points with big scale
         # big_points_ws = self.get_scaling.max(dim=1).values > extent * self.percent_big_ws
 

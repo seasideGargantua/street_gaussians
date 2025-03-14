@@ -78,10 +78,10 @@ class ONCE(object):
         obj_bound = (cv2.imread(cam_path)[..., 0]) > 0.
         return Image.fromarray(obj_bound)
 
-    def load_lidar_depth(self, frame_id, cam_name):
+    def load_lidar_depth(self, frame_id, cam_name, offset=None):
         w, h = self.get_WH()
         l2w = self.get_l2w(frame_id)
-        w2c = np.linalg.inv(self.get_c2w(frame_id, cam_name))
+        w2c = np.linalg.inv(self.get_c2w(frame_id, cam_name, offset=offset))
         ixt = self.get_intr(cam_name)
         points_xyz = self.load_point_cloud(frame_id)[:, :3]
         points_xyz_homo = np.concatenate([points_xyz, np.ones_like(points_xyz[..., :1])], axis=-1)
@@ -128,11 +128,14 @@ class ONCE(object):
         l2w[:3, 3] = position
         return l2w
 
-    def get_c2w(self, frame_id, cam_name):
+    def get_c2w(self, frame_id, cam_name, offset=None):
         c2l = np.array(self.calib[cam_name]['cam_to_velo'])
         l2w = np.eye(4)
         pose = self.frames[frame_id]['pose']
-        position = np.array(pose[4:])  # First three values: position [x, y, z]
+        if offset is not None:
+            position = np.array(pose[4:]) - offset  # First three values: position [x, y, z]
+        else:
+            position = np.array(pose[4:])
         rotation = np.array(pose[:4])  # Last four values: rotation [qw, qx, qy, qz]
         rotation = R.from_quat(rotation)  # 创建旋转对象
         rotation_matrix = rotation.as_matrix()  # 获取旋转矩阵

@@ -82,9 +82,9 @@ class SkyCubeMap(nn.Module):
             mask = sky_mask[0].to('cuda', non_blocking=True)
             mask[:50, :] = True
         elif acc is not None:
-            mask = (1 - acc[0]) > 1e-3
+            mask = sky_mask[0].to('cuda', non_blocking=True)
         else:
-            mask = None
+            mask = sky_mask[0].to('cuda', non_blocking=True)
 
         # R, T should be in w2c format
         # rays_d: [H, W, 3]

@@ -85,3 +85,53 @@ def sphere_intersection(rays_o, rays_d, center, radius):
     
     return p_sphere
 
+def spherical_to_cartesian(r, theta, phi):
+    x = r * torch.sin(theta) * torch.cos(phi)
+    y = r * torch.sin(theta) * torch.sin(phi)
+    z = r * torch.cos(theta)
+    return torch.stack([x, y, z], dim=1)
+
+def uniform_sample_sphere(num_samples, device, inverse=False):
+    """
+    refer to https://stackoverflow.com/questions/5408276/sampling-uniformly-distributed-random-points-inside-a-spherical-volume
+    sample points uniformly inside a sphere
+    """
+    if not inverse:
+        dist = torch.rand((num_samples,)).to(device)
+        dist = cube_root(dist)
+    else:
+        dist = torch.rand((num_samples,)).to(device)
+        dist = 1 / dist.clamp_min(0.02)
+    thetas = torch.arccos(2 * torch.rand((num_samples,)) - 1).to(device)
+    phis = 2 * torch.pi * torch.rand((num_samples,)).to(device)
+    pts = spherical_to_cartesian(dist, thetas, phis)
+    return pts
+
+def check_pts_visibility(ixt, exts, W, H, pts_xyz):
+    # filter out the lidar points that are not visible from the camera
+    ixt = torch.from_numpy(ixt).to(torch.float32)
+    valid_mask = torch.zeros_like(pts_xyz[:, 0]).bool()
+    # project lidar points to the image plane
+    for ext in exts:
+        ext = torch.from_numpy(ext).to(torch.float32)
+        intrinsic_4x4 = torch.nn.functional.pad(
+            ixt, (0, 1, 0, 1)
+        )
+        intrinsic_4x4[3, 3] = 1.0
+        lidar2img = (
+            intrinsic_4x4 @ ext.inverse()
+        )
+        projected_points = (
+            lidar2img[:3, :3] @ pts_xyz.T + lidar2img[:3, 3:4]
+        ).T
+        depth = projected_points[:, 2]
+        cam_points = projected_points[:, :2] / (depth.unsqueeze(-1) + 1e-6)
+        current_valid_mask = (
+            (cam_points[:, 0] >= 0)
+            & (cam_points[:, 0] < W)
+            & (cam_points[:, 1] >= 0)
+            & (cam_points[:, 1] < H)
+            & (depth > 0)
+        )
+        valid_mask = valid_mask | current_valid_mask
+    return valid_mask

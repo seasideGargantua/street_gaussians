@@ -9,7 +9,7 @@ from tqdm import tqdm
 from lib.config import cfg
 from lib.datasets.base_readers import storePly, fetchPly, get_Sphere_Norm
 from lib.utils.graphics_utils import focal2fov, BasicPointCloud
-from lib.utils.data_utils import get_val_frames
+from lib.utils.data_utils import get_val_frames, uniform_sample_sphere, check_pts_visibility
 from lib.utils.colmap_utils import read_points3D_binary
 from lib.datasets.base_readers import CameraInfo
 from lib.utils.once_devkit import ONCE
@@ -74,6 +74,11 @@ def generate_dataparser_outputs(datadir):
         os.makedirs(ply_dir, exist_ok=True)
 
     W,H = once_loader.get_WH()
+    poss = []
+    for idx, frame_id in tqdm(enumerate(frame_list)):
+        pos = once_loader.get_l2w(frame_id)[:3, 3]
+        poss.append(pos)
+    offset = np.array(poss).mean()
     for idx, frame_id in tqdm(enumerate(frame_list), desc="Loading data"):
         timestamp = idx / num_frames
         if build_pointcloud:
@@ -88,7 +93,7 @@ def generate_dataparser_outputs(datadir):
             obj_bound = once_loader.load_obj_bound(frame_id, cam_name)
 
             ixt = once_loader.get_intr(cam_name)
-            c2w = once_loader.get_c2w(frame_id, cam_name)
+            c2w = once_loader.get_c2w(frame_id, cam_name, offset=offset)
             l2w = once_loader.get_l2w(frame_id)
 
             w2c = np.linalg.inv(c2w)
@@ -109,7 +114,7 @@ def generate_dataparser_outputs(datadir):
 
             if build_pointcloud:
                 points_xyz_homo = np.concatenate([points_xyz, np.ones_like(points_xyz[..., :1])], axis=-1)
-                points_xyz_world = (points_xyz_homo @ l2w.T)[:, :3]
+                points_xyz_world = (points_xyz_homo @ l2w.T)[:, :3] - offset
                 points_dict = once_loader.split_point_cloud(points_xyz_world, points_time, image, obj_bound, w2c, ixt, W, H)
                 points_list.append(points_dict)
 
@@ -258,6 +263,15 @@ def generate_dataparser_outputs(datadir):
             points_bkgd_xyz = points_lidar_xyz
             points_bkgd_rgb = points_lidar_rgb
         
+        num_far_pts = 300000
+        far_rand_pts = uniform_sample_sphere(num_far_pts, 'cpu', inverse=True)
+        valid_mask = check_pts_visibility(ixts[0], c2ws, W, H, far_rand_pts)
+        far_rand_pts = far_rand_pts[valid_mask].numpy()
+        far_rand_rgb = np.random.rand(*far_rand_pts.shape).astype(np.float32)
+        print(f"generate far random pts num {far_rand_pts.shape[0]}")
+        points_bkgd_xyz = np.concatenate([points_bkgd_xyz, far_rand_pts], axis=0)
+        points_bkgd_rgb = np.concatenate([points_bkgd_rgb, far_rand_rgb], axis=0)
+
         points_xyz_dict['lidar'] = points_lidar_xyz
         points_rgb_dict['lidar'] = points_lidar_rgb
         points_xyz_dict['colmap'] = points_colmap_xyz

@@ -267,7 +267,8 @@ class MixGaussianModel(nn.Module):
             opacities.append(opacity_bkgd)
 
         if self.get_visibility('dynamic'):
-            opacity_dynamic = self.dynamic.get_opacity(ts)
+            # opacity_dynamic = self.dynamic.get_opacity(ts)
+            opacity_dynamic = self.dynamic.get_opacity()
             opacities.append(opacity_dynamic)
         
         opacities = torch.cat(opacities, dim=0)
@@ -390,6 +391,8 @@ class MixGaussianModel(nn.Module):
             model.xyz_gradient_accum[visibility_model, 1:2] += torch.norm(viewspace_point_tensor_grad_model[visibility_model, 2:], dim=-1, keepdim=True)
             model.denom[visibility_model] += 1
             if model_name == 'dynamic':
+                if model._t.grad is None:
+                    continue
                 model.t_gradient_accum[visibility_model] += model._t.grad.clone()[visibility_model].detach()
         
     def densify_and_prune(self, ts, max_grad, max_grad_t, min_opacity, prune_big_points, exclude_list=[]):
